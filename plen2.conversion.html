@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PLEN2 → Premaiduino 動作轉換器 (自動限幅＋反轉預設)</title>
+    <title>PLEN2 → Premaiduino 動作轉換器 (雙模式輸出)</title>
     <style>
         * {
             box-sizing: border-box;
@@ -20,7 +20,7 @@
         }
         
         .container {
-            max-width: 1600px;
+            max-width: 1800px;
             margin: 0 auto;
             background: white;
             border-radius: 20px;
@@ -131,6 +131,46 @@
         }
         
         .upload-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .mode-selector {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .mode-buttons {
+            display: flex;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .mode-btn {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        
+        .mode-btn.active {
+            background: #6B73FF;
+            color: white;
+            border-color: #000DFF;
+        }
+        
+        .ratio-control {
             background: #f8f9fa;
             border-radius: 15px;
             padding: 25px;
@@ -308,6 +348,29 @@
             background: #7b1fa2;
         }
         
+        .ratio-slider-container {
+            background: #0f3460;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .ratio-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: white;
+        }
+        
+        .ratio-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #00d4ff;
+            text-align: center;
+            margin: 10px 0;
+        }
+        
         .speed-slider-container {
             background: #0f3460;
             padding: 20px;
@@ -348,7 +411,7 @@
             cursor: pointer;
         }
         
-        .speed-presets {
+        .preset-buttons {
             display: flex;
             gap: 10px;
             margin: 15px 0;
@@ -356,7 +419,7 @@
             justify-content: center;
         }
         
-        .speed-preset-btn {
+        .preset-btn {
             padding: 8px 15px;
             background: #e9ecef;
             border: none;
@@ -365,7 +428,7 @@
             font-weight: bold;
         }
         
-        .speed-preset-btn:hover {
+        .preset-btn:hover {
             background: #6B73FF;
             color: white;
         }
@@ -419,18 +482,41 @@
             margin-left: 5px;
         }
         
-        .batch-preview {
+        .output-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .output-box {
             background: #1e1e3f;
             color: #a9dc76;
             padding: 15px;
             border-radius: 8px;
             font-family: monospace;
-            font-size: 13px;
+            font-size: 12px;
             max-height: 200px;
             overflow-y: auto;
-            margin: 15px 0;
             white-space: pre-wrap;
             word-wrap: break-word;
+        }
+        
+        .output-box.ascii {
+            border-left: 4px solid #00d4ff;
+        }
+        
+        .output-box.ics {
+            border-left: 4px solid #9c27b0;
+        }
+        
+        .output-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            color: white;
+            font-weight: bold;
         }
         
         .tab-container {
@@ -615,7 +701,7 @@
     <div class="container">
         <div class="header">
             <h1>🤖 PLEN2 → Premaiduino 動作轉換器</h1>
-            <p>獨立 Home Point｜獨立反轉｜比例 2.96｜自動限幅｜MV8取代MV10｜MV9取代MV11｜預設速度 0.3x</p>
+            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出</p>
         </div>
         
         <!-- 串口控制置頂 -->
@@ -679,42 +765,69 @@
                         <button class="btn btn-primary" id="convertBtn" disabled>🔍 分析動作</button>
                         <button class="btn btn-secondary" id="clearBtn">🗑️ 清除</button>
                     </div>
+                </div>
+                
+                <div class="mode-selector">
+                    <h3 style="margin-bottom: 15px; color: #495057;">📡 輸出模式</h3>
+                    <div class="mode-buttons">
+                        <button class="mode-btn active" id="modeASCII">📝 ASCII</button>
+                        <button class="mode-btn" id="modeICS">🔢 ICS 二進制</button>
+                        <button class="mode-btn" id="modeBoth">🔄 兩者並存</button>
+                    </div>
+                </div>
+                
+                <div class="ratio-control">
+                    <h3 style="margin-bottom: 15px; color: #495057;">📐 轉換比例</h3>
                     
-                    <div class="formula-box">
-                        <strong>📐 固定比例 2.96</strong><br>
-                        <code>Premaiduino = HomePoint + (PLEN2 × 2.96)</code><br>
-                        <code>超出範圍會自動限幅至 min/max</code><br>
-                        <code>MV8取代MV10｜MV9取代MV11</code><br>
-                        <code>JSON 0 = 你 calibrate 嘅 home point</code>
+                    <div class="ratio-slider-container">
+                        <div class="ratio-label">
+                            <span>比例值</span>
+                            <span id="ratioDisplay" class="ratio-value">2.96</span>
+                        </div>
+                        <input type="range" id="ratioSlider" min="1.0" max="5.0" step="0.01" value="2.96">
+                        <div style="display: flex; justify-content: space-between; color: #888; margin-top: 5px;">
+                            <span>1.0x</span>
+                            <span>2.0x</span>
+                            <span>2.96x (預設)</span>
+                            <span>4.0x</span>
+                            <span>5.0x</span>
+                        </div>
+                    </div>
+                    
+                    <div class="preset-buttons">
+                        <button class="preset-btn" id="ratio1Btn">1.0x</button>
+                        <button class="preset-btn" id="ratio2Btn">2.0x</button>
+                        <button class="preset-btn" id="ratio296Btn">2.96x (預設)</button>
+                        <button class="preset-btn" id="ratio4Btn">4.0x</button>
+                        <button class="preset-btn" id="ratio5Btn">5.0x</button>
                     </div>
                 </div>
                 
                 <div class="speed-control">
-                    <h3 style="margin-bottom: 15px; color: #495057;">⚡ 速度調整 (0.1x - 1.5x)</h3>
+                    <h3 style="margin-bottom: 15px; color: #495057;">⚡ 速度倍率</h3>
                     
                     <div class="speed-slider-container">
                         <div class="speed-label">
                             <span>速度倍率</span>
-                            <span id="speedMultiplierDisplay" class="speed-value">0.30x</span>
+                            <span id="speedDisplay" class="speed-value">0.30x</span>
                         </div>
-                        <input type="range" id="speedMultiplier" min="0.1" max="1.5" step="0.05" value="0.30">
+                        <input type="range" id="speedSlider" min="0.1" max="1.5" step="0.05" value="0.30">
                         <div style="display: flex; justify-content: space-between; color: #888; margin-top: 5px;">
-                            <span>0.1x (最慢)</span>
+                            <span>0.1x</span>
                             <span>0.3x (預設)</span>
                             <span>0.5x</span>
-                            <span>1.0x (正常)</span>
-                            <span>1.5x (最快)</span>
+                            <span>1.0x</span>
+                            <span>1.5x</span>
                         </div>
                     </div>
                     
-                    <div class="speed-presets">
-                        <button class="speed-preset-btn" id="speedMinBtn">🐢 0.1x</button>
-                        <button class="speed-preset-btn" id="speedQuarterBtn">⚡ 0.3x (預設)</button>
-                        <button class="speed-preset-btn" id="speedHalfBtn">🐢 0.5x</button>
-                        <button class="speed-preset-btn" id="speedNormalBtn">⚡ 1.0x (正常)</button>
-                        <button class="speed-preset-btn" id="speedMaxBtn">🚀 1.5x</button>
+                    <div class="preset-buttons">
+                        <button class="preset-btn" id="speed01Btn">0.1x</button>
+                        <button class="preset-btn" id="speed03Btn">0.3x (預設)</button>
+                        <button class="preset-btn" id="speed05Btn">0.5x</button>
+                        <button class="preset-btn" id="speed10Btn">1.0x</button>
+                        <button class="preset-btn" id="speed15Btn">1.5x</button>
                     </div>
-                    <p style="font-size: 12px; color: #00cc66; margin-top: 5px;">✅ 載入JSON後自動套用0.3x</p>
                 </div>
                 
                 <div class="servo-settings">
@@ -731,7 +844,7 @@
                             <thead>
                                 <tr>
                                     <th>群組</th>
-                                    <th>ID</th>
+                                    <th>binaryID</th>
                                     <th>中文名稱</th>
                                     <th>Home Point</th>
                                     <th>範圍</th>
@@ -748,11 +861,18 @@
                 <div class="batch-control">
                     <h3 style="margin-bottom: 15px; color: #495057;">📦 Batch Send</h3>
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                        一次過傳送所有 Frame 指令（逐行發送，等 Premaiduino 自己 buffer）
+                        一次過傳送所有 Frame 指令（可選 ASCII / ICS 模式）
                     </p>
                     
-                    <div class="batch-preview" id="batchPreview">
-                        上傳 JSON 後會顯示 Batch 指令
+                    <div class="output-panel">
+                        <div class="output-box ascii" id="asciiOutput">
+                            <div class="output-header">📝 ASCII 指令</div>
+                            <div id="asciiBatchContent">上傳 JSON 後會顯示 ASCII 指令</div>
+                        </div>
+                        <div class="output-box ics" id="icsOutput">
+                            <div class="output-header">🔢 ICS 二進制 (HEX)</div>
+                            <div id="icsBatchContent">上傳 JSON 後會顯示 ICS 二進制</div>
+                        </div>
                     </div>
                     
                     <div class="button-group">
@@ -818,41 +938,53 @@
         </div>
         
         <footer>
-            <p>✅ 只傳有郁嘅伺服｜JSON 0 = 你 calibrate 嘅 home point｜比例 2.96｜速度 0.1-1.5x｜預設 0.3x｜自動限幅｜HV5/6/11/12預設反轉</p>
+            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜MV8取代MV10, MV9取代MV11｜HV5/6/11/12預設反轉</p>
         </footer>
     </div>
     
     <script>
-        // ===== Premaiduino 25 個伺服 Home Point, 範圍 同反轉設定 =====
+        // ===== 新ID系統: HV=1-14, MV=21-31 =====
+        const BINARY_IDS = {
+            // HV群 1-14
+            'HV1': 1, 'HV2': 2, 'HV3': 3, 'HV4': 4, 'HV5': 5, 'HV6': 6,
+            'HV7': 7, 'HV8': 8, 'HV9': 9, 'HV10': 10, 'HV11': 11, 'HV12': 12,
+            'HV13': 13, 'HV14': 14,
+            
+            // MV群 21-31
+            'MV1': 21, 'MV2': 22, 'MV3': 23, 'MV4': 24, 'MV5': 25,
+            'MV6': 26, 'MV7': 27, 'MV8': 28, 'MV9': 29, 'MV10': 30, 'MV11': 31
+        };
+        
+        // ===== 新 Home Point 設定 =====
         let SERVO_CONFIG = {
-            // MV群 (11個) - 全部唔反轉
-            'MV1': { home: 7500, min: 7200, max: 8400, reverse: false },
-            'MV2': { home: 7500, min: 5000, max: 10000, reverse: false },
-            'MV3': { home: 7500, min: 6900, max: 8100, reverse: false },
-            'MV4': { home: 9800, min: 7450, max: 10350, reverse: false },
-            'MV5': { home: 5200, min: 4550, max: 7550, reverse: false },
-            'MV6': { home: 7500, min: 4000, max: 11000, reverse: false },
-            'MV7': { home: 7500, min: 4000, max: 11000, reverse: false },
-            'MV8': { home: 7500, min: 7100, max: 11000, reverse: false },
-            'MV9': { home: 7500, min: 4000, max: 7900, reverse: false },
-            'MV10': { home: 5000, min: 3500, max: 11500, reverse: false },
-            'MV11': { home: 10000, min: 3500, max: 11500, reverse: false },
+            // MV群 (11個)
+            'MV1': { home: 7500, min: 7200, max: 8400, reverse: false, binaryId: 21 },
+            'MV2': { home: 7500, min: 5000, max: 10000, reverse: false, binaryId: 22 },
+            'MV3': { home: 7500, min: 6900, max: 8100, reverse: false, binaryId: 23 },
+            'MV4': { home: 9800, min: 7450, max: 10350, reverse: false, binaryId: 24 },
+            'MV5': { home: 5200, min: 4550, max: 7550, reverse: false, binaryId: 25 },
+            'MV6': { home: 7500, min: 4000, max: 11000, reverse: false, binaryId: 26 },
+            'MV7': { home: 7500, min: 4000, max: 11000, reverse: false, binaryId: 27 },
+            'MV8': { home: 7500, min: 7100, max: 11000, reverse: false, binaryId: 28 },
+            'MV9': { home: 7500, min: 4000, max: 7900, reverse: false, binaryId: 29 },
+            'MV10': { home: 5000, min: 3500, max: 11500, reverse: false, binaryId: 30 },
+            'MV11': { home: 10000, min: 3500, max: 11500, reverse: false, binaryId: 31 },
             
             // HV群 (14個)
-            'HV1': { home: 10200, min: 4300, max: 11500, reverse: false },
-            'HV2': { home: 4700, min: 3500, max: 10700, reverse: false },
-            'HV3': { home: 7780, min: 6530, max: 9030, reverse: false },
-            'HV4': { home: 7500, min: 6250, max: 8750, reverse: false },
-            'HV5': { home: 7400, min: 6700, max: 8300, reverse: true },   // ✅ 反轉
-            'HV6': { home: 7600, min: 6700, max: 8300, reverse: true },   // ✅ 反轉
-            'HV7': { home: 7500, min: 4700, max: 10200, reverse: false },
-            'HV8': { home: 7500, min: 4700, max: 10200, reverse: false },
-            'HV9': { home: 7500, min: 3950, max: 7600, reverse: false },
-            'HV10': { home: 7500, min: 7400, max: 11050, reverse: false },
-            'HV11': { home: 7500, min: 5700, max: 8300, reverse: true },  // ✅ 反轉
-            'HV12': { home: 7550, min: 6750, max: 9350, reverse: true },  // ✅ 反轉
-            'HV13': { home: 7825, min: 6800, max: 9150, reverse: false },
-            'HV14': { home: 7450, min: 6200, max: 8450, reverse: false }
+            'HV1': { home: 10200, min: 4300, max: 11500, reverse: false, binaryId: 1 },
+            'HV2': { home: 4700, min: 3500, max: 10700, reverse: false, binaryId: 2 },
+            'HV3': { home: 7780, min: 6530, max: 9030, reverse: false, binaryId: 3 },
+            'HV4': { home: 7500, min: 6250, max: 8750, reverse: false, binaryId: 4 },
+            'HV5': { home: 7400, min: 6700, max: 8300, reverse: true, binaryId: 5 },
+            'HV6': { home: 7600, min: 6700, max: 8300, reverse: true, binaryId: 6 },
+            'HV7': { home: 7500, min: 4700, max: 10200, reverse: false, binaryId: 7 },
+            'HV8': { home: 7500, min: 4700, max: 10200, reverse: false, binaryId: 8 },
+            'HV9': { home: 7500, min: 3950, max: 7600, reverse: false, binaryId: 9 },
+            'HV10': { home: 7500, min: 7400, max: 11050, reverse: false, binaryId: 10 },
+            'HV11': { home: 7500, min: 5700, max: 8300, reverse: true, binaryId: 11 },
+            'HV12': { home: 7550, min: 6750, max: 9350, reverse: true, binaryId: 12 },
+            'HV13': { home: 7825, min: 6800, max: 9150, reverse: false, binaryId: 13 },
+            'HV14': { home: 7450, min: 6200, max: 8450, reverse: false, binaryId: 14 }
         };
         
         // ===== PLEN2 名稱對應 (MV8取代MV10, MV9取代MV11) =====
@@ -877,9 +1009,6 @@
             'right_foot_roll': 'HV13'
         };
         
-        // ===== 固定比例 =====
-        const FIXED_RATIO = 2.96;
-        
         // ===== 全域變數 =====
         let currentJsonData = null;
         let processedFrames = [];
@@ -889,10 +1018,12 @@
         let reader = null;
         let writer = null;
         let isPlaying = false;
+        let currentRatio = 2.96;
         let currentSpeedMultiplier = 0.30;
+        let currentMode = 'ASCII'; // ASCII, ICS, BOTH
         let servoMoveCount = {};
         let changesMade = false;
-        let clampLog = [];  // 記錄限幅情況
+        let clampLog = [];
         
         // ===== DOM 元素 =====
         const uploadArea = document.getElementById('uploadArea');
@@ -907,17 +1038,32 @@
         const servoTableBody = document.getElementById('servoTableBody');
         const changedIndicator = document.getElementById('changedIndicator');
         
-        // 速度控制
-        const speedMultiplier = document.getElementById('speedMultiplier');
-        const speedMultiplierDisplay = document.getElementById('speedMultiplierDisplay');
-        const speedMinBtn = document.getElementById('speedMinBtn');
-        const speedQuarterBtn = document.getElementById('speedQuarterBtn');
-        const speedHalfBtn = document.getElementById('speedHalfBtn');
-        const speedNormalBtn = document.getElementById('speedNormalBtn');
-        const speedMaxBtn = document.getElementById('speedMaxBtn');
+        // 模式選擇
+        const modeASCII = document.getElementById('modeASCII');
+        const modeICS = document.getElementById('modeICS');
+        const modeBoth = document.getElementById('modeBoth');
         
-        // Batch 相關
-        const batchPreview = document.getElementById('batchPreview');
+        // 比例控制
+        const ratioSlider = document.getElementById('ratioSlider');
+        const ratioDisplay = document.getElementById('ratioDisplay');
+        const ratio1Btn = document.getElementById('ratio1Btn');
+        const ratio2Btn = document.getElementById('ratio2Btn');
+        const ratio296Btn = document.getElementById('ratio296Btn');
+        const ratio4Btn = document.getElementById('ratio4Btn');
+        const ratio5Btn = document.getElementById('ratio5Btn');
+        
+        // 速度控制
+        const speedSlider = document.getElementById('speedSlider');
+        const speedDisplay = document.getElementById('speedDisplay');
+        const speed01Btn = document.getElementById('speed01Btn');
+        const speed03Btn = document.getElementById('speed03Btn');
+        const speed05Btn = document.getElementById('speed05Btn');
+        const speed10Btn = document.getElementById('speed10Btn');
+        const speed15Btn = document.getElementById('speed15Btn');
+        
+        // 輸出相關
+        const asciiOutput = document.getElementById('asciiBatchContent');
+        const icsOutput = document.getElementById('icsBatchContent');
         const sendBatchBtn = document.getElementById('sendBatchBtn');
         const copyBatchBtn = document.getElementById('copyBatchBtn');
         const batchTotalTime = document.getElementById('batchTotalTime');
@@ -951,31 +1097,25 @@
             renderServoTable();
             setupEventListeners();
             if (serialLog) {
-                addSerialLog('✅ 動作轉換器已啟動');
-                addSerialLog('📊 比例 2.96｜獨立 Home Point｜獨立反轉｜自動限幅');
-                addSerialLog('📌 JSON 0 = 你 calibrate 嘅 home point');
-                addSerialLog('⚡ 速度 0.1-1.5x｜預設 0.3x - 一入JSON自動套用');
-                addSerialLog('🔄 HV5/6/11/12 預設反轉');
+                addSerialLog('✅ PLEN2 轉換器已啟動');
+                addSerialLog('📊 新ID系統: HV=1-14, MV=21-31');
+                addSerialLog('📐 比例可調 (預設 2.96)｜雙模式輸出');
             }
         }
         
         // ===== 設定事件監聽 =====
         function setupEventListeners() {
+            // 上傳區域
             if (uploadArea) {
-                uploadArea.addEventListener('click', function() {
-                    fileInput.click();
-                });
-                
-                uploadArea.addEventListener('dragover', function(e) {
+                uploadArea.addEventListener('click', () => fileInput.click());
+                uploadArea.addEventListener('dragover', (e) => {
                     e.preventDefault();
                     uploadArea.classList.add('dragover');
                 });
-                
-                uploadArea.addEventListener('dragleave', function() {
+                uploadArea.addEventListener('dragleave', () => {
                     uploadArea.classList.remove('dragover');
                 });
-                
-                uploadArea.addEventListener('drop', function(e) {
+                uploadArea.addEventListener('drop', (e) => {
                     e.preventDefault();
                     uploadArea.classList.remove('dragover');
                     if (e.dataTransfer.files.length > 0) {
@@ -985,25 +1125,18 @@
             }
             
             if (fileInput) {
-                fileInput.addEventListener('change', function(e) {
-                    if (e.target.files.length > 0) {
-                        handleFile(e.target.files[0]);
-                    }
+                fileInput.addEventListener('change', (e) => {
+                    if (e.target.files.length > 0) handleFile(e.target.files[0]);
                 });
             }
             
-            if (clearBtn) {
-                clearBtn.addEventListener('click', clearAll);
-            }
-            
-            if (convertBtn) {
-                convertBtn.addEventListener('click', function() {
-                    if (currentJsonData) processMotion(currentJsonData);
-                });
-            }
+            if (clearBtn) clearBtn.addEventListener('click', clearAll);
+            if (convertBtn) convertBtn.addEventListener('click', () => {
+                if (currentJsonData) processMotion(currentJsonData);
+            });
             
             if (renewBtn) {
-                renewBtn.addEventListener('click', function() {
+                renewBtn.addEventListener('click', () => {
                     if (currentJsonData) {
                         // 從表格讀取最新設定
                         document.querySelectorAll('.home-input').forEach(input => {
@@ -1022,89 +1155,126 @@
                 });
             }
             
-            if (speedMultiplier) {
-                speedMultiplier.addEventListener('input', function() {
-                    const val = parseFloat(speedMultiplier.value);
-                    speedMultiplierDisplay.textContent = val.toFixed(2) + 'x';
-                    currentSpeedMultiplier = val;
+            // 模式切換
+            if (modeASCII) modeASCII.addEventListener('click', () => {
+                currentMode = 'ASCII';
+                updateModeButtons(modeASCII);
+                updateAllOutputs();
+            });
+            if (modeICS) modeICS.addEventListener('click', () => {
+                currentMode = 'ICS';
+                updateModeButtons(modeICS);
+                updateAllOutputs();
+            });
+            if (modeBoth) modeBoth.addEventListener('click', () => {
+                currentMode = 'BOTH';
+                updateModeButtons(modeBoth);
+                updateAllOutputs();
+            });
+            
+            // 比例控制
+            if (ratioSlider) {
+                ratioSlider.addEventListener('input', () => {
+                    currentRatio = parseFloat(ratioSlider.value);
+                    ratioDisplay.textContent = currentRatio.toFixed(2);
+                    if (currentJsonData) processMotion(currentJsonData);
+                });
+            }
+            
+            if (ratio1Btn) ratio1Btn.addEventListener('click', () => {
+                ratioSlider.value = 1.0;
+                currentRatio = 1.0;
+                ratioDisplay.textContent = '1.00';
+                if (currentJsonData) processMotion(currentJsonData);
+            });
+            
+            if (ratio2Btn) ratio2Btn.addEventListener('click', () => {
+                ratioSlider.value = 2.0;
+                currentRatio = 2.0;
+                ratioDisplay.textContent = '2.00';
+                if (currentJsonData) processMotion(currentJsonData);
+            });
+            
+            if (ratio296Btn) ratio296Btn.addEventListener('click', () => {
+                ratioSlider.value = 2.96;
+                currentRatio = 2.96;
+                ratioDisplay.textContent = '2.96';
+                if (currentJsonData) processMotion(currentJsonData);
+            });
+            
+            if (ratio4Btn) ratio4Btn.addEventListener('click', () => {
+                ratioSlider.value = 4.0;
+                currentRatio = 4.0;
+                ratioDisplay.textContent = '4.00';
+                if (currentJsonData) processMotion(currentJsonData);
+            });
+            
+            if (ratio5Btn) ratio5Btn.addEventListener('click', () => {
+                ratioSlider.value = 5.0;
+                currentRatio = 5.0;
+                ratioDisplay.textContent = '5.00';
+                if (currentJsonData) processMotion(currentJsonData);
+            });
+            
+            // 速度控制
+            if (speedSlider) {
+                speedSlider.addEventListener('input', () => {
+                    currentSpeedMultiplier = parseFloat(speedSlider.value);
+                    speedDisplay.textContent = currentSpeedMultiplier.toFixed(2) + 'x';
                     if (currentJsonData) applySpeedMultiplier();
                 });
             }
             
-            if (speedMinBtn) {
-                speedMinBtn.addEventListener('click', function() {
-                    speedMultiplier.value = 0.1;
-                    speedMultiplierDisplay.textContent = '0.10x';
-                    currentSpeedMultiplier = 0.1;
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
+            if (speed01Btn) speed01Btn.addEventListener('click', () => {
+                speedSlider.value = 0.1;
+                currentSpeedMultiplier = 0.1;
+                speedDisplay.textContent = '0.10x';
+                if (currentJsonData) applySpeedMultiplier();
+            });
             
-            if (speedQuarterBtn) {
-                speedQuarterBtn.addEventListener('click', function() {
-                    speedMultiplier.value = 0.3;
-                    speedMultiplierDisplay.textContent = '0.30x';
-                    currentSpeedMultiplier = 0.3;
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
+            if (speed03Btn) speed03Btn.addEventListener('click', () => {
+                speedSlider.value = 0.3;
+                currentSpeedMultiplier = 0.3;
+                speedDisplay.textContent = '0.30x';
+                if (currentJsonData) applySpeedMultiplier();
+            });
             
-            if (speedHalfBtn) {
-                speedHalfBtn.addEventListener('click', function() {
-                    speedMultiplier.value = 0.5;
-                    speedMultiplierDisplay.textContent = '0.50x';
-                    currentSpeedMultiplier = 0.5;
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
+            if (speed05Btn) speed05Btn.addEventListener('click', () => {
+                speedSlider.value = 0.5;
+                currentSpeedMultiplier = 0.5;
+                speedDisplay.textContent = '0.50x';
+                if (currentJsonData) applySpeedMultiplier();
+            });
             
-            if (speedNormalBtn) {
-                speedNormalBtn.addEventListener('click', function() {
-                    speedMultiplier.value = 1.0;
-                    speedMultiplierDisplay.textContent = '1.00x';
-                    currentSpeedMultiplier = 1.0;
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
+            if (speed10Btn) speed10Btn.addEventListener('click', () => {
+                speedSlider.value = 1.0;
+                currentSpeedMultiplier = 1.0;
+                speedDisplay.textContent = '1.00x';
+                if (currentJsonData) applySpeedMultiplier();
+            });
             
-            if (speedMaxBtn) {
-                speedMaxBtn.addEventListener('click', function() {
-                    speedMultiplier.value = 1.5;
-                    speedMultiplierDisplay.textContent = '1.50x';
-                    currentSpeedMultiplier = 1.5;
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
+            if (speed15Btn) speed15Btn.addEventListener('click', () => {
+                speedSlider.value = 1.5;
+                currentSpeedMultiplier = 1.5;
+                speedDisplay.textContent = '1.50x';
+                if (currentJsonData) applySpeedMultiplier();
+            });
             
-            if (sendBatchBtn) {
-                sendBatchBtn.addEventListener('click', sendBatch);
-            }
-            
-            if (copyBatchBtn) {
-                copyBatchBtn.addEventListener('click', copyBatch);
-            }
-            
-            if (playAllBtn) {
-                playAllBtn.addEventListener('click', playAll);
-            }
-            
-            if (homeBtn) {
-                homeBtn.addEventListener('click', sendHome);
-            }
-            
-            if (copyAllBtn) {
-                copyAllBtn.addEventListener('click', copyAllCommands);
-            }
+            if (sendBatchBtn) sendBatchBtn.addEventListener('click', sendBatch);
+            if (copyBatchBtn) copyBatchBtn.addEventListener('click', copyBatch);
+            if (playAllBtn) playAllBtn.addEventListener('click', playAll);
+            if (homeBtn) homeBtn.addEventListener('click', sendHome);
+            if (copyAllBtn) copyAllBtn.addEventListener('click', copyAllCommands);
             
             if (sendFrameBtn) {
-                sendFrameBtn.addEventListener('click', function() {
+                sendFrameBtn.addEventListener('click', () => {
                     const activeBtn = document.querySelector('.frame-btn.active');
                     if (activeBtn) sendFrame(parseInt(activeBtn.dataset.index));
                 });
             }
             
             if (copyFrameBtn) {
-                copyFrameBtn.addEventListener('click', function() {
+                copyFrameBtn.addEventListener('click', () => {
                     const activeBtn = document.querySelector('.frame-btn.active');
                     if (activeBtn && processedFrames[activeBtn.dataset.index]) {
                         copyToClipboard(processedFrames[activeBtn.dataset.index].command);
@@ -1112,6 +1282,7 @@
                 });
             }
             
+            // Tab切換
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1122,72 +1293,58 @@
                 });
             });
             
-            if (connectSerial) {
-                connectSerial.addEventListener('click', connectSerialPort);
-            }
-            
-            if (disconnectSerial) {
-                disconnectSerial.addEventListener('click', disconnectSerialPort);
-            }
-            
-            if (sendCustomBtn) {
-                sendCustomBtn.addEventListener('click', sendCustomCommand);
-            }
-            
-            if (customCommand) {
-                customCommand.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter') sendCustomCommand();
-                });
-            }
+            if (connectSerial) connectSerial.addEventListener('click', connectSerialPort);
+            if (disconnectSerial) disconnectSerial.addEventListener('click', disconnectSerialPort);
+            if (sendCustomBtn) sendCustomBtn.addEventListener('click', sendCustomCommand);
+            if (customCommand) customCommand.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendCustomCommand();
+            });
+        }
+        
+        // ===== 更新模式按鈕狀態 =====
+        function updateModeButtons(activeBtn) {
+            [modeASCII, modeICS, modeBoth].forEach(btn => {
+                if (btn) btn.classList.remove('active');
+            });
+            activeBtn.classList.add('active');
         }
         
         // ===== 初始化伺服設定表格 =====
         function renderServoTable() {
             if (!servoTableBody) return;
             
-            const allServos = [];
-            
-            // HV 1-14
-            for (let i = 1; i <= 14; i++) {
-                const id = `HV${i}`;
-                allServos.push({
+            const allServos = [
+                // HV 1-14
+                ...Array.from({ length: 14 }, (_, i) => ({
                     group: 'HV',
-                    id: i,
-                    name: getServoName('HV', i),
-                    home: SERVO_CONFIG[id].home,
-                    min: SERVO_CONFIG[id].min,
-                    max: SERVO_CONFIG[id].max,
-                    reverse: SERVO_CONFIG[id].reverse
-                });
-            }
-            
-            // MV 1-11
-            for (let i = 1; i <= 11; i++) {
-                const id = `MV${i}`;
-                allServos.push({
+                    id: i + 1,
+                    name: getServoName('HV', i + 1),
+                    config: SERVO_CONFIG[`HV${i+1}`]
+                })),
+                // MV 1-11
+                ...Array.from({ length: 11 }, (_, i) => ({
                     group: 'MV',
-                    id: i,
-                    name: getServoName('MV', i),
-                    home: SERVO_CONFIG[id].home,
-                    min: SERVO_CONFIG[id].min,
-                    max: SERVO_CONFIG[id].max,
-                    reverse: SERVO_CONFIG[id].reverse
-                });
-            }
+                    id: i + 1,
+                    name: getServoName('MV', i + 1),
+                    config: SERVO_CONFIG[`MV${i+1}`]
+                }))
+            ];
             
             let html = '';
             allServos.forEach(servo => {
+                const servoId = `${servo.group}${servo.id}`;
+                const config = servo.config;
                 html += `
                     <tr>
                         <td>${servo.group}</td>
-                        <td>${servo.id}</td>
+                        <td>${config.binaryId}</td>
                         <td>${servo.name}</td>
                         <td>
-                            <input type="number" class="home-input" data-id="${servo.group}${servo.id}" value="${servo.home}" step="1">
+                            <input type="number" class="home-input" data-id="${servoId}" value="${config.home}" step="1">
                         </td>
-                        <td class="range-display">${servo.min}-${servo.max}</td>
+                        <td class="range-display">${config.min}-${config.max}</td>
                         <td>
-                            <input type="checkbox" class="reverse-checkbox" data-id="${servo.group}${servo.id}" ${servo.reverse ? 'checked' : ''}>
+                            <input type="checkbox" class="reverse-checkbox" data-id="${servoId}" ${config.reverse ? 'checked' : ''}>
                         </td>
                     </tr>
                 `;
@@ -1196,7 +1353,7 @@
             servoTableBody.innerHTML = html;
             
             document.querySelectorAll('.home-input, .reverse-checkbox').forEach(input => {
-                input.addEventListener('change', function(e) {
+                input.addEventListener('change', () => {
                     changesMade = true;
                     if (changedIndicator) changedIndicator.style.display = 'inline';
                     if (renewBtn) renewBtn.disabled = false;
@@ -1223,28 +1380,42 @@
         // ===== 轉換角度（基本公式 + 反轉 + 自動限幅） =====
         function convertAngle(plenValue, servoId) {
             const config = SERVO_CONFIG[servoId];
-            if (!config) return 7500 + Math.round(plenValue * FIXED_RATIO);
+            if (!config) return 7500 + Math.round(plenValue * currentRatio);
             
-            // 先睇反轉：如果反轉就將 PLEN2 數值乘 -1
-            let finalPlen = plenValue;
-            if (config.reverse) {
-                finalPlen = -plenValue;
-            }
+            let finalPlen = config.reverse ? -plenValue : plenValue;
+            let value = Math.round(config.home + (finalPlen * currentRatio));
             
-            // 基本公式：HomePoint + (PLEN2 × 2.96)
-            let value = Math.round(config.home + (finalPlen * FIXED_RATIO));
-            
-            // 自動限幅
-            let originalValue = value;
             if (value > config.max) {
                 value = config.max;
-                addSerialLog(`⚠️ ${servoId} 由 ${originalValue} 限幅至 ${config.max}`);
+                addSerialLog(`⚠️ ${servoId} 由 ${value} 限幅至 ${config.max}`);
             } else if (value < config.min) {
                 value = config.min;
-                addSerialLog(`⚠️ ${servoId} 由 ${originalValue} 限幅至 ${config.min}`);
+                addSerialLog(`⚠️ ${servoId} 由 ${value} 限幅至 ${config.min}`);
             }
             
             return value;
+        }
+        
+        // ===== 計算 XOR =====
+        function calculateXOR(bytes) {
+            return bytes.reduce((a, b) => a ^ b, 0);
+        }
+        
+        // ===== 生成 ICS 二進制指令 =====
+        function generateICSCommand(servoData, speed) {
+            const packet = [4 + servoData.length * 3, 0x18, speed];
+            
+            for (let s of servoData) {
+                const binaryId = SERVO_CONFIG[s.servoId].binaryId;
+                packet.push(binaryId);
+                packet.push((s.angle >> 7) & 0x7F);
+                packet.push(s.angle & 0x7F);
+            }
+            
+            const xor = calculateXOR(packet);
+            packet.push(xor);
+            
+            return packet.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
         }
         
         // ===== 處理檔案 =====
@@ -1299,16 +1470,17 @@
             if (frameGrid) frameGrid.innerHTML = '<p class="warning-message">上傳 JSON 後會顯示影格</p>';
             if (frameDetail) frameDetail.style.display = 'none';
             if (allCommandsOutput) allCommandsOutput.textContent = '// 上傳 JSON 後會顯示所有指令';
-            if (batchPreview) batchPreview.innerHTML = '上傳 JSON 後會顯示 Batch 指令';
+            if (asciiOutput) asciiOutput.innerHTML = '上傳 JSON 後會顯示 ASCII 指令';
+            if (icsOutput) icsOutput.innerHTML = '上傳 JSON 後會顯示 ICS 二進制';
             if (batchTotalTime) batchTotalTime.textContent = '0';
             if (statsOutput) statsOutput.innerHTML = '';
             
             changesMade = false;
             if (changedIndicator) changedIndicator.style.display = 'none';
             
-            if (speedMultiplier) {
-                speedMultiplier.value = 0.3;
-                speedMultiplierDisplay.textContent = '0.30x';
+            if (speedSlider) {
+                speedSlider.value = 0.3;
+                speedDisplay.textContent = '0.30x';
                 currentSpeedMultiplier = 0.3;
             }
             if (fileInput) fileInput.value = '';
@@ -1339,21 +1511,61 @@
                     const newSpeed = Math.round(originalFrame.originalSpeed * currentSpeedMultiplier);
                     frame.speed = Math.max(20, Math.min(127, newSpeed));
                     
-                    const cmdParts = frame.command.split(' ');
+                    // 更新 ASCII 指令
+                    const cmdParts = frame.asciiCommand.split(' ');
                     if (cmdParts.length >= 3) {
                         cmdParts[2] = frame.speed.toString();
-                        frame.command = cmdParts.join(' ');
+                        frame.asciiCommand = cmdParts.join(' ');
                     }
                 }
             }
             
-            renderAllCommands();
-            updateBatchPreview();
+            updateAllOutputs();
             
             const activeBtn = document.querySelector('.frame-btn.active');
             if (activeBtn) showFrame(parseInt(activeBtn.dataset.index));
             
             addSerialLog(`⚡ 速度倍率: ${currentSpeedMultiplier.toFixed(2)}x`);
+        }
+        
+        // ===== 更新所有輸出 =====
+        function updateAllOutputs() {
+            updateBatchOutput();
+            renderAllCommands();
+            
+            // 更新影格詳細
+            const activeBtn = document.querySelector('.frame-btn.active');
+            if (activeBtn) showFrame(parseInt(activeBtn.dataset.index));
+        }
+        
+        // ===== 更新 Batch 輸出 =====
+        function updateBatchOutput() {
+            if (!asciiOutput || !icsOutput) return;
+            
+            if (processedFrames.length === 0) {
+                asciiOutput.innerHTML = '上傳 JSON 後會顯示 ASCII 指令';
+                icsOutput.innerHTML = '上傳 JSON 後會顯示 ICS 二進制';
+                if (batchTotalTime) batchTotalTime.textContent = '0';
+                return;
+            }
+            
+            let asciiText = '';
+            let icsText = '';
+            let totalTime = 0;
+            
+            processedFrames.forEach(frame => {
+                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                    asciiText += frame.asciiCommand + '\n';
+                }
+                if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                    icsText += frame.icsCommand + '\n';
+                }
+                totalTime += frame.time;
+            });
+            
+            asciiOutput.innerHTML = asciiText.replace(/\n/g, '<br>') || '無 ASCII 指令';
+            icsOutput.innerHTML = icsText.replace(/\n/g, '<br>') || '無 ICS 指令';
+            if (batchTotalTime) batchTotalTime.textContent = totalTime;
         }
         
         // ===== 處理動作 =====
@@ -1368,7 +1580,7 @@
             activeServosSet.clear();
             servoMoveCount = {};
             
-            // 收集有郁嘅 servo (value ≠ 0)
+            // 收集有郁嘅 servo
             json.frames.forEach(frame => {
                 if (frame.outputs) {
                     frame.outputs.forEach(output => {
@@ -1379,7 +1591,7 @@
                 }
             });
             
-            // 轉換每個影格，只記錄有郁嘅 servo
+            // 轉換每個影格
             json.frames.forEach((frame, index) => {
                 const time = frame.transition_time_ms || 500;
                 let speed = Math.round(mapValue(time, 100, 2000, 127, 20));
@@ -1414,7 +1626,7 @@
                 lastValues = {...currentValues};
             }
             
-            // 生成指令（只傳有郁嘅）
+            // 生成指令
             lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const frame = originalFrames[i];
@@ -1423,17 +1635,31 @@
                 let servoData = [];
                 Object.keys(currentValues).forEach(servoId => {
                     if (i === 0 || currentValues[servoId] !== lastValues[servoId]) {
-                        servoData.push(`${servoId} ${currentValues[servoId]}`);
+                        servoData.push({
+                            servoId: servoId,
+                            angle: currentValues[servoId]
+                        });
                     }
                 });
                 
                 if (servoData.length > 0) {
+                    // 生成 ASCII 指令
+                    let asciiCmd = `S MULTI ${frame.speed} ${servoData.length}`;
+                    servoData.forEach(s => {
+                        asciiCmd += ` ${s.servoId} ${s.angle}`;
+                    });
+                    
+                    // 生成 ICS 指令
+                    const icsCmd = generateICSCommand(servoData, frame.speed);
+                    
                     processedFrames.push({
                         index: frame.index,
                         time: frame.time,
                         speed: frame.speed,
-                        command: `S MULTI ${frame.speed} ${servoData.length} ${servoData.join(' ')}`,
-                        servoCount: servoData.length
+                        asciiCommand: asciiCmd,
+                        icsCommand: icsCmd,
+                        servoCount: servoData.length,
+                        servoData: servoData
                     });
                 }
                 
@@ -1443,7 +1669,7 @@
             // 更新UI
             renderFrameButtons();
             renderAllCommands();
-            updateBatchPreview();
+            updateBatchOutput();
             renderStats();
             
             if (playAllBtn) playAllBtn.disabled = false;
@@ -1457,8 +1683,9 @@
             
             addSerialLog(`📂 已載入: ${json.name || '未知'} (${processedFrames.length}個影格)`);
             addSerialLog(`🔍 有 ${activeServosSet.size} 個伺服會郁`);
+            addSerialLog(`📐 使用比例: ${currentRatio.toFixed(2)}x`);
             
-            // 自動套用當前速度倍率 (0.3x)
+            // 自動套用當前速度倍率
             applySpeedMultiplier();
         }
         
@@ -1496,8 +1723,16 @@
                 if (parseInt(btn.dataset.index) === processedIndex) btn.classList.add('active');
             });
             
+            let commandText = '';
+            if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                commandText += `📝 ASCII:\n${frame.asciiCommand}\n\n`;
+            }
+            if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                commandText += `🔢 ICS:\n${frame.icsCommand}`;
+            }
+            
             if (frameTitle) frameTitle.textContent = `影格 ${frame.index} (${frame.time}ms) - ${frame.servoCount}個伺服 (speed ${frame.speed})`;
-            if (frameCommand) frameCommand.textContent = frame.command;
+            if (frameCommand) frameCommand.textContent = commandText;
             if (frameDetail) frameDetail.style.display = 'block';
             if (sendFrameBtn) sendFrameBtn.disabled = false;
             if (copyFrameBtn) copyFrameBtn.disabled = false;
@@ -1510,31 +1745,15 @@
             let text = '';
             processedFrames.forEach(frame => {
                 text += `// Frame ${frame.index} (${frame.time}ms)\n`;
-                text += frame.command + '\n\n';
+                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                    text += frame.asciiCommand + '\n';
+                }
+                if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                    text += '// ICS: ' + frame.icsCommand + '\n';
+                }
+                text += '\n';
             });
             allCommandsOutput.textContent = text || '// 沒有指令';
-        }
-        
-        // ===== 更新 Batch 預覽 =====
-        function updateBatchPreview() {
-            if (!batchPreview) return;
-            
-            if (processedFrames.length === 0) {
-                batchPreview.innerHTML = '上傳 JSON 後會顯示 Batch 指令';
-                if (batchTotalTime) batchTotalTime.textContent = '0';
-                return;
-            }
-            
-            let text = '';
-            let totalTime = 0;
-            
-            processedFrames.forEach(frame => {
-                text += frame.command + '\n';
-                totalTime += frame.time;
-            });
-            
-            batchPreview.innerHTML = text.replace(/\n/g, '<br>');
-            if (batchTotalTime) batchTotalTime.textContent = totalTime;
         }
         
         // ===== 複製所有指令 =====
@@ -1542,7 +1761,13 @@
             let text = '';
             processedFrames.forEach(frame => {
                 text += `// Frame ${frame.index} (${frame.time}ms)\n`;
-                text += frame.command + '\n\n';
+                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                    text += frame.asciiCommand + '\n';
+                }
+                if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                    text += '// ICS: ' + frame.icsCommand + '\n';
+                }
+                text += '\n';
             });
             copyToClipboard(text);
         }
@@ -1551,7 +1776,12 @@
         function copyBatch() {
             let text = '';
             processedFrames.forEach(frame => {
-                text += frame.command + '\n';
+                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                    text += frame.asciiCommand + '\n';
+                }
+                if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                    text += frame.icsCommand + '\n';
+                }
             });
             copyToClipboard(text);
         }
@@ -1563,11 +1793,13 @@
             let html = '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">';
             html += `<p><strong>總影格數：</strong> ${processedFrames.length}</p>`;
             html += `<p><strong>有郁伺服：</strong> ${activeServosSet.size} 個</p>`;
+            html += `<p><strong>轉換比例：</strong> ${currentRatio.toFixed(2)}x</p>`;
+            html += `<p><strong>速度倍率：</strong> ${currentSpeedMultiplier.toFixed(2)}x</p>`;
             html += '</div>';
             
             if (Object.keys(servoMoveCount).length > 0) {
                 html += '<h4 style="margin-top: 20px; margin-bottom: 10px;">📊 伺服移動次數</h4>';
-                html += '<table class="servo-stats-table"><thead><tr><th>伺服</th><th>移動次數</th></tr></thead><tbody>';
+                html += '<table class="servo-stats-table"><thead><tr><th>伺服</th><th>binaryID</th><th>移動次數</th></tr></thead><tbody>';
                 
                 const sortedServos = Object.keys(servoMoveCount).sort((a, b) => {
                     const aGroup = a.substring(0, 2), bGroup = b.substring(0, 2);
@@ -1577,7 +1809,7 @@
                 });
                 
                 sortedServos.forEach(servoId => {
-                    html += `<tr><td>${servoId}</td><td>${servoMoveCount[servoId]} 次</td></tr>`;
+                    html += `<tr><td>${servoId}</td><td>${SERVO_CONFIG[servoId].binaryId}</td><td>${servoMoveCount[servoId]} 次</td></tr>`;
                 });
                 html += '</tbody></table>';
             }
@@ -1600,7 +1832,14 @@
             addSerialLog('📦 開始發送 Batch 指令');
             
             for (let i = 0; i < processedFrames.length; i++) {
-                await sendSerialCommand(processedFrames[i].command);
+                const frame = processedFrames[i];
+                
+                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                    await sendSerialCommand(frame.asciiCommand);
+                }
+                if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                    await sendSerialCommand(frame.icsCommand);
+                }
             }
             
             addSerialLog('✅ Batch 指令發送完成');
@@ -1608,7 +1847,15 @@
         
         // ===== 發送影格 =====
         async function sendFrame(index) {
-            if (processedFrames[index]) await sendSerialCommand(processedFrames[index].command);
+            const frame = processedFrames[index];
+            if (!frame) return;
+            
+            if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                await sendSerialCommand(frame.asciiCommand);
+            }
+            if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                await sendSerialCommand(frame.icsCommand);
+            }
         }
         
         // ===== 播放全部 =====
@@ -1738,7 +1985,7 @@
             navigator.clipboard.writeText(text).then(() => alert('✅ 已複製！')).catch(() => alert('❌ 複製失敗'));
         }
         
-        // ===== 確保所有 DOM 元素都準備好先啟動 =====
+        // ===== 啟動 =====
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', init);
         } else {
