@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PLEN2 → Premaiduino 動作轉換器 (雙模式輸出)</title>
+    <title>PLEN2 → Premaiduino 動作轉換器 (正常版)</title>
     <style>
         * {
             box-sizing: border-box;
@@ -46,7 +46,6 @@
             opacity: 0.9;
         }
         
-        /* 串口控制置頂 */
         .serial-top {
             background: #f0f3ff;
             padding: 20px 30px;
@@ -475,13 +474,6 @@
             cursor: pointer;
         }
         
-        .clamp-indicator {
-            color: #ff9800;
-            font-weight: bold;
-            font-size: 12px;
-            margin-left: 5px;
-        }
-        
         .output-panel {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -517,6 +509,20 @@
             margin-bottom: 8px;
             color: white;
             font-weight: bold;
+        }
+        
+        .send-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .send-btn:hover {
+            background: #218838;
         }
         
         .tab-container {
@@ -701,10 +707,9 @@
     <div class="container">
         <div class="header">
             <h1>🤖 PLEN2 → Premaiduino 動作轉換器</h1>
-            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出</p>
+            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出｜正常版</p>
         </div>
         
-        <!-- 串口控制置頂 -->
         <div class="serial-top">
             <span class="serial-label">🔌 串口控制</span>
             <div class="serial-input-group">
@@ -714,9 +719,6 @@
                     <option value="38400">38400</option>
                     <option value="57600">57600</option>
                     <option value="115200" selected>115200</option>
-                    <option value="250000">250000</option>
-                    <option value="500000">500000</option>
-                    <option value="1000000">1000000</option>
                 </select>
                 <button class="btn btn-success" id="connectSerial">🔌 連接</button>
                 <button class="btn btn-danger" id="disconnectSerial" disabled>❌ 斷開</button>
@@ -837,7 +839,7 @@
                     </div>
                     <p style="font-size: 13px; color: #6c757d; margin-bottom: 15px;">
                         每個伺服可以獨立設定 Home Point 同反轉，按 <strong>更新轉換</strong> 重新計算
-                        <span id="changedIndicator" class="changed-indicator" style="display: none;">⚡ 已更改</span>
+                        <span id="changedIndicator" style="display: none;">⚡ 已更改</span>
                     </p>
                     <div style="max-height: 350px; overflow-y: auto;">
                         <table class="servo-table">
@@ -866,17 +868,23 @@
                     
                     <div class="output-panel">
                         <div class="output-box ascii" id="asciiOutput">
-                            <div class="output-header">📝 ASCII 指令</div>
+                            <div class="output-header">
+                                <span>📝 ASCII 指令</span>
+                                <button class="send-btn" id="sendAsciiBtn">📤 發送 ASCII</button>
+                            </div>
                             <div id="asciiBatchContent">上傳 JSON 後會顯示 ASCII 指令</div>
                         </div>
                         <div class="output-box ics" id="icsOutput">
-                            <div class="output-header">🔢 ICS 二進制 (HEX)</div>
+                            <div class="output-header">
+                                <span>🔢 ICS 二進制</span>
+                                <button class="send-btn" id="sendIcsBtn">📤 發送 ICS</button>
+                            </div>
                             <div id="icsBatchContent">上傳 JSON 後會顯示 ICS 二進制</div>
                         </div>
                     </div>
                     
                     <div class="button-group">
-                        <button class="btn btn-purple" id="sendBatchBtn" disabled>📤 發送 Batch</button>
+                        <button class="btn btn-purple" id="sendBatchBtn" disabled>📤 發送 Batch (按模式)</button>
                         <button class="btn btn-secondary" id="copyBatchBtn" disabled>📋 複製 Batch</button>
                     </div>
                     <p style="font-size: 13px; color: #666; margin-top: 10px;">
@@ -931,33 +939,29 @@
                 </div>
                 
                 <div style="margin-top: 20px; display: flex; gap: 10px;">
-                    <input type="text" id="customCommand" class="serial-input" placeholder="輸入自訂指令" disabled>
-                    <button class="btn btn-primary" id="sendCustomBtn" disabled>📤 發送</button>
+                    <input type="text" id="customCommand" class="serial-input" placeholder="輸入自訂指令" style="flex:1; padding:10px; border:1px solid #ced4da; border-radius:4px;">
+                    <button class="btn btn-primary" id="sendCustomBtn">📤 發送</button>
                 </div>
             </div>
         </div>
         
         <footer>
-            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜MV8取代MV10, MV9取代MV11｜HV5/6/11/12預設反轉</p>
+            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜正常版 (連接已修復)</p>
         </footer>
     </div>
     
     <script>
         // ===== 新ID系統: HV=1-14, MV=21-31 =====
         const BINARY_IDS = {
-            // HV群 1-14
             'HV1': 1, 'HV2': 2, 'HV3': 3, 'HV4': 4, 'HV5': 5, 'HV6': 6,
             'HV7': 7, 'HV8': 8, 'HV9': 9, 'HV10': 10, 'HV11': 11, 'HV12': 12,
             'HV13': 13, 'HV14': 14,
-            
-            // MV群 21-31
             'MV1': 21, 'MV2': 22, 'MV3': 23, 'MV4': 24, 'MV5': 25,
             'MV6': 26, 'MV7': 27, 'MV8': 28, 'MV9': 29, 'MV10': 30, 'MV11': 31
         };
         
         // ===== 新 Home Point 設定 =====
         let SERVO_CONFIG = {
-            // MV群 (11個)
             'MV1': { home: 7500, min: 7200, max: 8400, reverse: false, binaryId: 21 },
             'MV2': { home: 7500, min: 5000, max: 10000, reverse: false, binaryId: 22 },
             'MV3': { home: 7500, min: 6900, max: 8100, reverse: false, binaryId: 23 },
@@ -969,8 +973,6 @@
             'MV9': { home: 7500, min: 4000, max: 7900, reverse: false, binaryId: 29 },
             'MV10': { home: 5000, min: 3500, max: 11500, reverse: false, binaryId: 30 },
             'MV11': { home: 10000, min: 3500, max: 11500, reverse: false, binaryId: 31 },
-            
-            // HV群 (14個)
             'HV1': { home: 10200, min: 4300, max: 11500, reverse: false, binaryId: 1 },
             'HV2': { home: 4700, min: 3500, max: 10700, reverse: false, binaryId: 2 },
             'HV3': { home: 7780, min: 6530, max: 9030, reverse: false, binaryId: 3 },
@@ -987,7 +989,6 @@
             'HV14': { home: 7450, min: 6200, max: 8450, reverse: false, binaryId: 14 }
         };
         
-        // ===== PLEN2 名稱對應 (MV8取代MV10, MV9取代MV11) =====
         const NAME_MAPPING = {
             'left_shoulder_pitch': 'HV2',
             'right_shoulder_pitch': 'HV1',
@@ -1009,23 +1010,22 @@
             'right_foot_roll': 'HV13'
         };
         
-        // ===== 全域變數 =====
         let currentJsonData = null;
         let processedFrames = [];
         let originalFrames = [];
         let activeServosSet = new Set();
-        let serialPort = null;
+        let port = null;
         let reader = null;
         let writer = null;
         let isPlaying = false;
         let currentRatio = 2.96;
         let currentSpeedMultiplier = 0.30;
-        let currentMode = 'ASCII'; // ASCII, ICS, BOTH
+        let currentMode = 'ASCII';
         let servoMoveCount = {};
         let changesMade = false;
-        let clampLog = [];
+        let logEntries = [];
         
-        // ===== DOM 元素 =====
+        // DOM 元素
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const fileInfo = document.getElementById('fileInfo');
@@ -1038,37 +1038,23 @@
         const servoTableBody = document.getElementById('servoTableBody');
         const changedIndicator = document.getElementById('changedIndicator');
         
-        // 模式選擇
         const modeASCII = document.getElementById('modeASCII');
         const modeICS = document.getElementById('modeICS');
         const modeBoth = document.getElementById('modeBoth');
         
-        // 比例控制
         const ratioSlider = document.getElementById('ratioSlider');
         const ratioDisplay = document.getElementById('ratioDisplay');
-        const ratio1Btn = document.getElementById('ratio1Btn');
-        const ratio2Btn = document.getElementById('ratio2Btn');
-        const ratio296Btn = document.getElementById('ratio296Btn');
-        const ratio4Btn = document.getElementById('ratio4Btn');
-        const ratio5Btn = document.getElementById('ratio5Btn');
-        
-        // 速度控制
         const speedSlider = document.getElementById('speedSlider');
         const speedDisplay = document.getElementById('speedDisplay');
-        const speed01Btn = document.getElementById('speed01Btn');
-        const speed03Btn = document.getElementById('speed03Btn');
-        const speed05Btn = document.getElementById('speed05Btn');
-        const speed10Btn = document.getElementById('speed10Btn');
-        const speed15Btn = document.getElementById('speed15Btn');
         
-        // 輸出相關
         const asciiOutput = document.getElementById('asciiBatchContent');
         const icsOutput = document.getElementById('icsBatchContent');
+        const sendAsciiBtn = document.getElementById('sendAsciiBtn');
+        const sendIcsBtn = document.getElementById('sendIcsBtn');
         const sendBatchBtn = document.getElementById('sendBatchBtn');
         const copyBatchBtn = document.getElementById('copyBatchBtn');
         const batchTotalTime = document.getElementById('batchTotalTime');
         
-        // 影格相關
         const playAllBtn = document.getElementById('playAllBtn');
         const homeBtn = document.getElementById('homeBtn');
         const frameGrid = document.getElementById('frameGrid');
@@ -1078,211 +1064,147 @@
         const sendFrameBtn = document.getElementById('sendFrameBtn');
         const copyFrameBtn = document.getElementById('copyFrameBtn');
         
-        // 指令相關
         const allCommandsOutput = document.getElementById('allCommandsOutput');
         const copyAllBtn = document.getElementById('copyAllBtn');
         const statsOutput = document.getElementById('statsOutput');
         
-        // 串口相關
-        const connectSerial = document.getElementById('connectSerial');
-        const disconnectSerial = document.getElementById('disconnectSerial');
+        const connectBtn = document.getElementById('connectSerial');
+        const disconnectBtn = document.getElementById('disconnectSerial');
         const serialStatus = document.getElementById('serialStatus');
         const customCommand = document.getElementById('customCommand');
         const sendCustomBtn = document.getElementById('sendCustomBtn');
         const serialLog = document.getElementById('serialLog');
         const baudRate = document.getElementById('baudRate');
         
-        // ===== 初始化 =====
         function init() {
             renderServoTable();
             setupEventListeners();
-            if (serialLog) {
-                addSerialLog('✅ PLEN2 轉換器已啟動');
-                addSerialLog('📊 新ID系統: HV=1-14, MV=21-31');
-                addSerialLog('📐 比例可調 (預設 2.96)｜雙模式輸出');
-            }
+            addLog('✅ PLEN2 轉換器已啟動 (正常版)');
+            addLog('📊 新ID系統: HV=1-14, MV=21-31');
+            addLog('📐 比例可調 (預設 2.96)｜雙模式輸出');
         }
         
-        // ===== 設定事件監聽 =====
         function setupEventListeners() {
-            // 上傳區域
-            if (uploadArea) {
-                uploadArea.addEventListener('click', () => fileInput.click());
-                uploadArea.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    uploadArea.classList.add('dragover');
-                });
-                uploadArea.addEventListener('dragleave', () => {
-                    uploadArea.classList.remove('dragover');
-                });
-                uploadArea.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    uploadArea.classList.remove('dragover');
-                    if (e.dataTransfer.files.length > 0) {
-                        handleFile(e.dataTransfer.files[0]);
-                    }
-                });
-            }
+            uploadArea.addEventListener('click', () => fileInput.click());
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+            });
             
-            if (fileInput) {
-                fileInput.addEventListener('change', (e) => {
-                    if (e.target.files.length > 0) handleFile(e.target.files[0]);
-                });
-            }
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) handleFile(e.target.files[0]);
+            });
             
-            if (clearBtn) clearBtn.addEventListener('click', clearAll);
-            if (convertBtn) convertBtn.addEventListener('click', () => {
+            clearBtn.addEventListener('click', clearAll);
+            convertBtn.addEventListener('click', () => {
                 if (currentJsonData) processMotion(currentJsonData);
             });
             
-            if (renewBtn) {
-                renewBtn.addEventListener('click', () => {
-                    if (currentJsonData) {
-                        // 從表格讀取最新設定
-                        document.querySelectorAll('.home-input').forEach(input => {
-                            const servoId = input.dataset.id;
-                            SERVO_CONFIG[servoId].home = parseInt(input.value) || 7500;
-                        });
-                        document.querySelectorAll('.reverse-checkbox').forEach(cb => {
-                            const servoId = cb.dataset.id;
-                            SERVO_CONFIG[servoId].reverse = cb.checked;
-                        });
-                        processMotion(currentJsonData);
-                        changesMade = false;
-                        changedIndicator.style.display = 'none';
-                        renewBtn.disabled = true;
-                    }
-                });
-            }
+            renewBtn.addEventListener('click', () => {
+                if (currentJsonData) {
+                    document.querySelectorAll('.home-input').forEach(input => {
+                        const servoId = input.dataset.id;
+                        SERVO_CONFIG[servoId].home = parseInt(input.value) || 7500;
+                    });
+                    document.querySelectorAll('.reverse-checkbox').forEach(cb => {
+                        const servoId = cb.dataset.id;
+                        SERVO_CONFIG[servoId].reverse = cb.checked;
+                    });
+                    processMotion(currentJsonData);
+                    changesMade = false;
+                    changedIndicator.style.display = 'none';
+                    renewBtn.disabled = true;
+                }
+            });
             
-            // 模式切換
-            if (modeASCII) modeASCII.addEventListener('click', () => {
+            modeASCII.addEventListener('click', () => {
                 currentMode = 'ASCII';
                 updateModeButtons(modeASCII);
                 updateAllOutputs();
             });
-            if (modeICS) modeICS.addEventListener('click', () => {
+            modeICS.addEventListener('click', () => {
                 currentMode = 'ICS';
                 updateModeButtons(modeICS);
                 updateAllOutputs();
             });
-            if (modeBoth) modeBoth.addEventListener('click', () => {
+            modeBoth.addEventListener('click', () => {
                 currentMode = 'BOTH';
                 updateModeButtons(modeBoth);
                 updateAllOutputs();
             });
             
-            // 比例控制
-            if (ratioSlider) {
-                ratioSlider.addEventListener('input', () => {
-                    currentRatio = parseFloat(ratioSlider.value);
-                    ratioDisplay.textContent = currentRatio.toFixed(2);
-                    if (currentJsonData) processMotion(currentJsonData);
-                });
-            }
-            
-            if (ratio1Btn) ratio1Btn.addEventListener('click', () => {
-                ratioSlider.value = 1.0;
-                currentRatio = 1.0;
-                ratioDisplay.textContent = '1.00';
+            ratioSlider.addEventListener('input', () => {
+                currentRatio = parseFloat(ratioSlider.value);
+                ratioDisplay.textContent = currentRatio.toFixed(2);
                 if (currentJsonData) processMotion(currentJsonData);
             });
             
-            if (ratio2Btn) ratio2Btn.addEventListener('click', () => {
-                ratioSlider.value = 2.0;
-                currentRatio = 2.0;
-                ratioDisplay.textContent = '2.00';
-                if (currentJsonData) processMotion(currentJsonData);
-            });
-            
-            if (ratio296Btn) ratio296Btn.addEventListener('click', () => {
-                ratioSlider.value = 2.96;
-                currentRatio = 2.96;
-                ratioDisplay.textContent = '2.96';
-                if (currentJsonData) processMotion(currentJsonData);
-            });
-            
-            if (ratio4Btn) ratio4Btn.addEventListener('click', () => {
-                ratioSlider.value = 4.0;
-                currentRatio = 4.0;
-                ratioDisplay.textContent = '4.00';
-                if (currentJsonData) processMotion(currentJsonData);
-            });
-            
-            if (ratio5Btn) ratio5Btn.addEventListener('click', () => {
-                ratioSlider.value = 5.0;
-                currentRatio = 5.0;
-                ratioDisplay.textContent = '5.00';
-                if (currentJsonData) processMotion(currentJsonData);
-            });
-            
-            // 速度控制
-            if (speedSlider) {
-                speedSlider.addEventListener('input', () => {
-                    currentSpeedMultiplier = parseFloat(speedSlider.value);
-                    speedDisplay.textContent = currentSpeedMultiplier.toFixed(2) + 'x';
-                    if (currentJsonData) applySpeedMultiplier();
-                });
-            }
-            
-            if (speed01Btn) speed01Btn.addEventListener('click', () => {
-                speedSlider.value = 0.1;
-                currentSpeedMultiplier = 0.1;
-                speedDisplay.textContent = '0.10x';
+            speedSlider.addEventListener('input', () => {
+                currentSpeedMultiplier = parseFloat(speedSlider.value);
+                speedDisplay.textContent = currentSpeedMultiplier.toFixed(2) + 'x';
                 if (currentJsonData) applySpeedMultiplier();
             });
             
-            if (speed03Btn) speed03Btn.addEventListener('click', () => {
-                speedSlider.value = 0.3;
-                currentSpeedMultiplier = 0.3;
-                speedDisplay.textContent = '0.30x';
-                if (currentJsonData) applySpeedMultiplier();
+            document.querySelectorAll('[id^="ratio"]').forEach(btn => {
+                if (btn.id !== 'ratioSlider' && btn.id !== 'ratioDisplay') {
+                    btn.addEventListener('click', () => {
+                        const val = parseFloat(btn.textContent.replace('x', ''));
+                        ratioSlider.value = val;
+                        currentRatio = val;
+                        ratioDisplay.textContent = val.toFixed(2);
+                        if (currentJsonData) processMotion(currentJsonData);
+                    });
+                }
             });
             
-            if (speed05Btn) speed05Btn.addEventListener('click', () => {
-                speedSlider.value = 0.5;
-                currentSpeedMultiplier = 0.5;
-                speedDisplay.textContent = '0.50x';
-                if (currentJsonData) applySpeedMultiplier();
+            document.querySelectorAll('[id^="speed"]').forEach(btn => {
+                if (btn.id !== 'speedSlider' && btn.id !== 'speedDisplay') {
+                    btn.addEventListener('click', () => {
+                        const val = parseFloat(btn.textContent.replace('x', ''));
+                        speedSlider.value = val;
+                        currentSpeedMultiplier = val;
+                        speedDisplay.textContent = val.toFixed(2) + 'x';
+                        if (currentJsonData) applySpeedMultiplier();
+                    });
+                }
             });
             
-            if (speed10Btn) speed10Btn.addEventListener('click', () => {
-                speedSlider.value = 1.0;
-                currentSpeedMultiplier = 1.0;
-                speedDisplay.textContent = '1.00x';
-                if (currentJsonData) applySpeedMultiplier();
+            sendAsciiBtn.addEventListener('click', sendAsciiBatch);
+            sendIcsBtn.addEventListener('click', sendIcsBatch);
+            sendBatchBtn.addEventListener('click', sendBatch);
+            copyBatchBtn.addEventListener('click', copyBatch);
+            playAllBtn.addEventListener('click', playAll);
+            homeBtn.addEventListener('click', sendHome);
+            copyAllBtn.addEventListener('click', copyAllCommands);
+            
+            sendFrameBtn.addEventListener('click', () => {
+                const activeBtn = document.querySelector('.frame-btn.active');
+                if (activeBtn) sendFrame(parseInt(activeBtn.dataset.index));
             });
             
-            if (speed15Btn) speed15Btn.addEventListener('click', () => {
-                speedSlider.value = 1.5;
-                currentSpeedMultiplier = 1.5;
-                speedDisplay.textContent = '1.50x';
-                if (currentJsonData) applySpeedMultiplier();
-            });
-            
-            if (sendBatchBtn) sendBatchBtn.addEventListener('click', sendBatch);
-            if (copyBatchBtn) copyBatchBtn.addEventListener('click', copyBatch);
-            if (playAllBtn) playAllBtn.addEventListener('click', playAll);
-            if (homeBtn) homeBtn.addEventListener('click', sendHome);
-            if (copyAllBtn) copyAllBtn.addEventListener('click', copyAllCommands);
-            
-            if (sendFrameBtn) {
-                sendFrameBtn.addEventListener('click', () => {
-                    const activeBtn = document.querySelector('.frame-btn.active');
-                    if (activeBtn) sendFrame(parseInt(activeBtn.dataset.index));
-                });
-            }
-            
-            if (copyFrameBtn) {
-                copyFrameBtn.addEventListener('click', () => {
-                    const activeBtn = document.querySelector('.frame-btn.active');
-                    if (activeBtn && processedFrames[activeBtn.dataset.index]) {
-                        copyToClipboard(processedFrames[activeBtn.dataset.index].command);
+            copyFrameBtn.addEventListener('click', () => {
+                const activeBtn = document.querySelector('.frame-btn.active');
+                if (activeBtn && processedFrames[activeBtn.dataset.index]) {
+                    const frame = processedFrames[activeBtn.dataset.index];
+                    let text = '';
+                    if (currentMode === 'ASCII' || currentMode === 'BOTH') {
+                        text += frame.asciiCommand + '\n';
                     }
-                });
-            }
+                    if (currentMode === 'ICS' || currentMode === 'BOTH') {
+                        text += frame.icsCommand;
+                    }
+                    copyToClipboard(text);
+                }
+            });
             
-            // Tab切換
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1293,40 +1215,35 @@
                 });
             });
             
-            if (connectSerial) connectSerial.addEventListener('click', connectSerialPort);
-            if (disconnectSerial) disconnectSerial.addEventListener('click', disconnectSerialPort);
-            if (sendCustomBtn) sendCustomBtn.addEventListener('click', sendCustomCommand);
-            if (customCommand) customCommand.addEventListener('keypress', (e) => {
+            // 串口事件 - 用返正常名
+            connectBtn.addEventListener('click', connectSerial);
+            disconnectBtn.addEventListener('click', disconnectSerial);
+            sendCustomBtn.addEventListener('click', sendCustomCommand);
+            customCommand.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') sendCustomCommand();
             });
         }
         
-        // ===== 更新模式按鈕狀態 =====
         function updateModeButtons(activeBtn) {
-            [modeASCII, modeICS, modeBoth].forEach(btn => {
-                if (btn) btn.classList.remove('active');
-            });
+            [modeASCII, modeICS, modeBoth].forEach(btn => btn.classList.remove('active'));
             activeBtn.classList.add('active');
         }
         
-        // ===== 初始化伺服設定表格 =====
         function renderServoTable() {
             if (!servoTableBody) return;
             
             const allServos = [
-                // HV 1-14
-                ...Array.from({ length: 14 }, (_, i) => ({
+                ...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(i => ({
                     group: 'HV',
-                    id: i + 1,
-                    name: getServoName('HV', i + 1),
-                    config: SERVO_CONFIG[`HV${i+1}`]
+                    id: i,
+                    name: getServoName('HV', i),
+                    config: SERVO_CONFIG[`HV${i}`]
                 })),
-                // MV 1-11
-                ...Array.from({ length: 11 }, (_, i) => ({
+                ...[1,2,3,4,5,6,7,8,9,10,11].map(i => ({
                     group: 'MV',
-                    id: i + 1,
-                    name: getServoName('MV', i + 1),
-                    config: SERVO_CONFIG[`MV${i+1}`]
+                    id: i,
+                    name: getServoName('MV', i),
+                    config: SERVO_CONFIG[`MV${i}`]
                 }))
             ];
             
@@ -1339,29 +1256,23 @@
                         <td>${servo.group}</td>
                         <td>${config.binaryId}</td>
                         <td>${servo.name}</td>
-                        <td>
-                            <input type="number" class="home-input" data-id="${servoId}" value="${config.home}" step="1">
-                        </td>
+                        <td><input type="number" class="home-input" data-id="${servoId}" value="${config.home}" step="1"></td>
                         <td class="range-display">${config.min}-${config.max}</td>
-                        <td>
-                            <input type="checkbox" class="reverse-checkbox" data-id="${servoId}" ${config.reverse ? 'checked' : ''}>
-                        </td>
+                        <td><input type="checkbox" class="reverse-checkbox" data-id="${servoId}" ${config.reverse ? 'checked' : ''}></td>
                     </tr>
                 `;
             });
-            
             servoTableBody.innerHTML = html;
             
             document.querySelectorAll('.home-input, .reverse-checkbox').forEach(input => {
                 input.addEventListener('change', () => {
                     changesMade = true;
-                    if (changedIndicator) changedIndicator.style.display = 'inline';
-                    if (renewBtn) renewBtn.disabled = false;
+                    changedIndicator.style.display = 'inline';
+                    renewBtn.disabled = false;
                 });
             });
         }
         
-        // ===== 取得伺服中文名稱 =====
         function getServoName(group, id) {
             const names = {
                 'HV1': '肩ピッチR', 'HV2': '肩ピッチL', 'HV3': 'ヒップヨーR',
@@ -1377,7 +1288,6 @@
             return names[`${group}${id}`] || '-';
         }
         
-        // ===== 轉換角度（基本公式 + 反轉 + 自動限幅） =====
         function convertAngle(plenValue, servoId) {
             const config = SERVO_CONFIG[servoId];
             if (!config) return 7500 + Math.round(plenValue * currentRatio);
@@ -1385,40 +1295,29 @@
             let finalPlen = config.reverse ? -plenValue : plenValue;
             let value = Math.round(config.home + (finalPlen * currentRatio));
             
-            if (value > config.max) {
-                value = config.max;
-                addSerialLog(`⚠️ ${servoId} 由 ${value} 限幅至 ${config.max}`);
-            } else if (value < config.min) {
-                value = config.min;
-                addSerialLog(`⚠️ ${servoId} 由 ${value} 限幅至 ${config.min}`);
-            }
+            if (value > config.max) value = config.max;
+            else if (value < config.min) value = config.min;
             
             return value;
         }
         
-        // ===== 計算 XOR =====
         function calculateXOR(bytes) {
             return bytes.reduce((a, b) => a ^ b, 0);
         }
         
-        // ===== 生成 ICS 二進制指令 =====
         function generateICSCommand(servoData, speed) {
             const packet = [4 + servoData.length * 3, 0x18, speed];
-            
             for (let s of servoData) {
                 const binaryId = SERVO_CONFIG[s.servoId].binaryId;
                 packet.push(binaryId);
                 packet.push((s.angle >> 7) & 0x7F);
                 packet.push(s.angle & 0x7F);
             }
-            
             const xor = calculateXOR(packet);
             packet.push(xor);
-            
             return packet.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
         }
         
-        // ===== 處理檔案 =====
         function handleFile(file) {
             if (!file.name.toLowerCase().endsWith('.json')) {
                 alert('請上傳 JSON 格式的檔案！');
@@ -1431,12 +1330,12 @@
                     const jsonData = JSON.parse(e.target.result);
                     currentJsonData = jsonData;
                     
-                    if (fileName) fileName.textContent = file.name;
-                    if (actionName) actionName.textContent = jsonData.name || '未知';
-                    if (frameCount) frameCount.textContent = jsonData.frames ? jsonData.frames.length : 0;
-                    if (fileInfo) fileInfo.classList.add('show');
+                    fileName.textContent = file.name;
+                    actionName.textContent = jsonData.name || '未知';
+                    frameCount.textContent = jsonData.frames ? jsonData.frames.length : 0;
+                    fileInfo.classList.add('show');
                     
-                    if (convertBtn) convertBtn.disabled = false;
+                    convertBtn.disabled = false;
                     processMotion(jsonData);
                     
                 } catch (error) {
@@ -1446,61 +1345,49 @@
             reader.readAsText(file);
         }
         
-        // ===== 清除所有 =====
         function clearAll() {
             currentJsonData = null;
             processedFrames = [];
             originalFrames = [];
             activeServosSet.clear();
             servoMoveCount = {};
-            clampLog = [];
             
-            if (fileInfo) fileInfo.classList.remove('show');
-            if (fileName) fileName.textContent = '-';
-            if (actionName) actionName.textContent = '-';
-            if (frameCount) frameCount.textContent = '-';
+            fileInfo.classList.remove('show');
+            fileName.textContent = '-';
+            actionName.textContent = '-';
+            frameCount.textContent = '-';
             
-            if (convertBtn) convertBtn.disabled = true;
-            if (renewBtn) renewBtn.disabled = true;
-            if (playAllBtn) playAllBtn.disabled = true;
-            if (homeBtn) homeBtn.disabled = true;
-            if (sendBatchBtn) sendBatchBtn.disabled = true;
-            if (copyBatchBtn) copyBatchBtn.disabled = true;
+            convertBtn.disabled = true;
+            renewBtn.disabled = true;
+            playAllBtn.disabled = true;
+            homeBtn.disabled = true;
+            sendBatchBtn.disabled = true;
+            copyBatchBtn.disabled = true;
             
-            if (frameGrid) frameGrid.innerHTML = '<p class="warning-message">上傳 JSON 後會顯示影格</p>';
-            if (frameDetail) frameDetail.style.display = 'none';
-            if (allCommandsOutput) allCommandsOutput.textContent = '// 上傳 JSON 後會顯示所有指令';
-            if (asciiOutput) asciiOutput.innerHTML = '上傳 JSON 後會顯示 ASCII 指令';
-            if (icsOutput) icsOutput.innerHTML = '上傳 JSON 後會顯示 ICS 二進制';
-            if (batchTotalTime) batchTotalTime.textContent = '0';
-            if (statsOutput) statsOutput.innerHTML = '';
+            frameGrid.innerHTML = '<p class="warning-message">上傳 JSON 後會顯示影格</p>';
+            frameDetail.style.display = 'none';
+            allCommandsOutput.textContent = '// 上傳 JSON 後會顯示所有指令';
+            asciiOutput.innerHTML = '上傳 JSON 後會顯示 ASCII 指令';
+            icsOutput.innerHTML = '上傳 JSON 後會顯示 ICS 二進制';
+            batchTotalTime.textContent = '0';
+            statsOutput.innerHTML = '';
             
             changesMade = false;
-            if (changedIndicator) changedIndicator.style.display = 'none';
+            changedIndicator.style.display = 'none';
             
-            if (speedSlider) {
-                speedSlider.value = 0.3;
-                speedDisplay.textContent = '0.30x';
-                currentSpeedMultiplier = 0.3;
-            }
-            if (fileInput) fileInput.value = '';
+            speedSlider.value = 0.3;
+            speedDisplay.textContent = '0.30x';
+            currentSpeedMultiplier = 0.3;
+            fileInput.value = '';
         }
         
-        // ===== 生成全體回家指令 =====
         function generateHomeCommand() {
             let cmd = 'S MULTI 64 25';
-            for (let i = 1; i <= 14; i++) {
-                const id = `HV${i}`;
-                cmd += ` HV${i} ${SERVO_CONFIG[id].home}`;
-            }
-            for (let i = 1; i <= 11; i++) {
-                const id = `MV${i}`;
-                cmd += ` MV${i} ${SERVO_CONFIG[id].home}`;
-            }
+            for (let i = 1; i <= 14; i++) cmd += ` HV${i} ${SERVO_CONFIG[`HV${i}`].home}`;
+            for (let i = 1; i <= 11; i++) cmd += ` MV${i} ${SERVO_CONFIG[`MV${i}`].home}`;
             return cmd;
         }
         
-        // ===== 套用速度倍率 =====
         function applySpeedMultiplier() {
             if (originalFrames.length === 0) return;
             
@@ -1511,41 +1398,39 @@
                     const newSpeed = Math.round(originalFrame.originalSpeed * currentSpeedMultiplier);
                     frame.speed = Math.max(20, Math.min(127, newSpeed));
                     
-                    // 更新 ASCII 指令
                     const cmdParts = frame.asciiCommand.split(' ');
                     if (cmdParts.length >= 3) {
                         cmdParts[2] = frame.speed.toString();
                         frame.asciiCommand = cmdParts.join(' ');
                     }
+                    
+                    const servoData = frame.servoData.map(s => ({
+                        servoId: s.servoId,
+                        angle: s.angle
+                    }));
+                    frame.icsCommand = generateICSCommand(servoData, frame.speed);
                 }
             }
             
             updateAllOutputs();
-            
             const activeBtn = document.querySelector('.frame-btn.active');
             if (activeBtn) showFrame(parseInt(activeBtn.dataset.index));
-            
-            addSerialLog(`⚡ 速度倍率: ${currentSpeedMultiplier.toFixed(2)}x`);
         }
         
-        // ===== 更新所有輸出 =====
         function updateAllOutputs() {
             updateBatchOutput();
             renderAllCommands();
-            
-            // 更新影格詳細
             const activeBtn = document.querySelector('.frame-btn.active');
             if (activeBtn) showFrame(parseInt(activeBtn.dataset.index));
         }
         
-        // ===== 更新 Batch 輸出 =====
         function updateBatchOutput() {
             if (!asciiOutput || !icsOutput) return;
             
             if (processedFrames.length === 0) {
                 asciiOutput.innerHTML = '上傳 JSON 後會顯示 ASCII 指令';
                 icsOutput.innerHTML = '上傳 JSON 後會顯示 ICS 二進制';
-                if (batchTotalTime) batchTotalTime.textContent = '0';
+                batchTotalTime.textContent = '0';
                 return;
             }
             
@@ -1565,10 +1450,9 @@
             
             asciiOutput.innerHTML = asciiText.replace(/\n/g, '<br>') || '無 ASCII 指令';
             icsOutput.innerHTML = icsText.replace(/\n/g, '<br>') || '無 ICS 指令';
-            if (batchTotalTime) batchTotalTime.textContent = totalTime;
+            batchTotalTime.textContent = totalTime;
         }
         
-        // ===== 處理動作 =====
         function processMotion(json) {
             if (!json.frames || !Array.isArray(json.frames)) {
                 alert('JSON 格式錯誤：找不到 frames 陣列');
@@ -1580,7 +1464,6 @@
             activeServosSet.clear();
             servoMoveCount = {};
             
-            // 收集有郁嘅 servo
             json.frames.forEach(frame => {
                 if (frame.outputs) {
                     frame.outputs.forEach(output => {
@@ -1591,10 +1474,9 @@
                 }
             });
             
-            // 轉換每個影格
             json.frames.forEach((frame, index) => {
                 const time = frame.transition_time_ms || 500;
-                let speed = Math.round(mapValue(time, 100, 2000, 127, 20));
+                let speed = Math.round(((time - 100) * (127 - 20)) / (2000 - 100) + 20);
                 speed = Math.max(20, Math.min(127, speed));
                 
                 let frameValues = {};
@@ -1603,7 +1485,6 @@
                         if (NAME_MAPPING[output.device] && output.value !== 0) {
                             const servoId = NAME_MAPPING[output.device];
                             frameValues[servoId] = convertAngle(output.value, servoId);
-                            
                             if (!servoMoveCount[servoId]) servoMoveCount[servoId] = 0;
                         }
                     });
@@ -1614,7 +1495,6 @@
                 });
             });
             
-            // 計算移動次數
             let lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const currentValues = originalFrames[i].values;
@@ -1626,7 +1506,6 @@
                 lastValues = {...currentValues};
             }
             
-            // 生成指令
             lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const frame = originalFrames[i];
@@ -1643,13 +1522,11 @@
                 });
                 
                 if (servoData.length > 0) {
-                    // 生成 ASCII 指令
                     let asciiCmd = `S MULTI ${frame.speed} ${servoData.length}`;
                     servoData.forEach(s => {
                         asciiCmd += ` ${s.servoId} ${s.angle}`;
                     });
                     
-                    // 生成 ICS 指令
                     const icsCmd = generateICSCommand(servoData, frame.speed);
                     
                     processedFrames.push({
@@ -1666,30 +1543,27 @@
                 lastValues = {...currentValues};
             }
             
-            // 更新UI
             renderFrameButtons();
             renderAllCommands();
             updateBatchOutput();
             renderStats();
             
-            if (playAllBtn) playAllBtn.disabled = false;
-            if (homeBtn) homeBtn.disabled = false;
-            if (sendBatchBtn) sendBatchBtn.disabled = false;
-            if (copyBatchBtn) copyBatchBtn.disabled = false;
-            if (renewBtn) renewBtn.disabled = true;
+            playAllBtn.disabled = false;
+            homeBtn.disabled = false;
+            sendBatchBtn.disabled = false;
+            copyBatchBtn.disabled = false;
+            renewBtn.disabled = true;
             
             changesMade = false;
-            if (changedIndicator) changedIndicator.style.display = 'none';
+            changedIndicator.style.display = 'none';
             
-            addSerialLog(`📂 已載入: ${json.name || '未知'} (${processedFrames.length}個影格)`);
-            addSerialLog(`🔍 有 ${activeServosSet.size} 個伺服會郁`);
-            addSerialLog(`📐 使用比例: ${currentRatio.toFixed(2)}x`);
+            addLog(`📂 已載入: ${json.name || '未知'} (${processedFrames.length}個影格)`);
+            addLog(`🔍 有 ${activeServosSet.size} 個伺服會郁`);
+            addLog(`📐 使用比例: ${currentRatio.toFixed(2)}x`);
             
-            // 自動套用當前速度倍率
             applySpeedMultiplier();
         }
         
-        // ===== 顯示影格按鈕 =====
         function renderFrameButtons() {
             if (!frameGrid) return;
             
@@ -1713,7 +1587,6 @@
             if (processedFrames.length > 0) showFrame(0);
         }
         
-        // ===== 顯示影格詳細 =====
         function showFrame(processedIndex) {
             const frame = processedFrames[processedIndex];
             if (!frame) return;
@@ -1731,14 +1604,13 @@
                 commandText += `🔢 ICS:\n${frame.icsCommand}`;
             }
             
-            if (frameTitle) frameTitle.textContent = `影格 ${frame.index} (${frame.time}ms) - ${frame.servoCount}個伺服 (speed ${frame.speed})`;
-            if (frameCommand) frameCommand.textContent = commandText;
-            if (frameDetail) frameDetail.style.display = 'block';
-            if (sendFrameBtn) sendFrameBtn.disabled = false;
-            if (copyFrameBtn) copyFrameBtn.disabled = false;
+            frameTitle.textContent = `影格 ${frame.index} (${frame.time}ms) - ${frame.servoCount}個伺服 (speed ${frame.speed})`;
+            frameCommand.textContent = commandText;
+            frameDetail.style.display = 'block';
+            sendFrameBtn.disabled = false;
+            copyFrameBtn.disabled = false;
         }
         
-        // ===== 顯示所有指令 =====
         function renderAllCommands() {
             if (!allCommandsOutput) return;
             
@@ -1756,7 +1628,6 @@
             allCommandsOutput.textContent = text || '// 沒有指令';
         }
         
-        // ===== 複製所有指令 =====
         function copyAllCommands() {
             let text = '';
             processedFrames.forEach(frame => {
@@ -1772,7 +1643,6 @@
             copyToClipboard(text);
         }
         
-        // ===== 複製 Batch =====
         function copyBatch() {
             let text = '';
             processedFrames.forEach(frame => {
@@ -1786,7 +1656,6 @@
             copyToClipboard(text);
         }
         
-        // ===== 顯示統計 =====
         function renderStats() {
             if (!statsOutput) return;
             
@@ -1817,35 +1686,35 @@
             statsOutput.innerHTML = html;
         }
         
-        // ===== 發送 Batch =====
-        async function sendBatch() {
-            if (!writer) {
-                addSerialLog('❌ 串口未連接');
-                return;
+        async function sendAsciiBatch() {
+            if (!writer || processedFrames.length === 0) return;
+            addLog('📤 發送 ASCII Batch');
+            for (let frame of processedFrames) {
+                await sendSerialCommand(frame.asciiCommand);
             }
-            
-            if (processedFrames.length === 0) {
-                addSerialLog('❌ 沒有可發送的指令');
-                return;
-            }
-            
-            addSerialLog('📦 開始發送 Batch 指令');
-            
-            for (let i = 0; i < processedFrames.length; i++) {
-                const frame = processedFrames[i];
-                
-                if (currentMode === 'ASCII' || currentMode === 'BOTH') {
-                    await sendSerialCommand(frame.asciiCommand);
-                }
-                if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                    await sendSerialCommand(frame.icsCommand);
-                }
-            }
-            
-            addSerialLog('✅ Batch 指令發送完成');
         }
         
-        // ===== 發送影格 =====
+        async function sendIcsBatch() {
+            if (!writer || processedFrames.length === 0) return;
+            addLog('📤 發送 ICS Batch');
+            for (let frame of processedFrames) {
+                const hexParts = frame.icsCommand.split(' ');
+                const bytes = hexParts.map(b => parseInt(b, 16));
+                await writer.write(new Uint8Array(bytes));
+                addLog('📤 [ICS] ' + frame.icsCommand);
+                await delay(50);
+            }
+        }
+        
+        async function sendBatch() {
+            if (currentMode === 'ASCII') await sendAsciiBatch();
+            else if (currentMode === 'ICS') await sendIcsBatch();
+            else {
+                await sendAsciiBatch();
+                await sendIcsBatch();
+            }
+        }
+        
         async function sendFrame(index) {
             const frame = processedFrames[index];
             if (!frame) return;
@@ -1854,15 +1723,17 @@
                 await sendSerialCommand(frame.asciiCommand);
             }
             if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                await sendSerialCommand(frame.icsCommand);
+                const hexParts = frame.icsCommand.split(' ');
+                const bytes = hexParts.map(b => parseInt(b, 16));
+                await writer.write(new Uint8Array(bytes));
+                addLog('📤 [ICS] ' + frame.icsCommand);
             }
         }
         
-        // ===== 播放全部 =====
         async function playAll() {
             if (isPlaying || processedFrames.length === 0) return;
             isPlaying = true;
-            addSerialLog('🎬 開始播放全部影格');
+            addLog('🎬 開始播放全部影格');
             
             for (let i = 0; i < processedFrames.length; i++) {
                 if (!isPlaying) break;
@@ -1870,78 +1741,71 @@
                 await new Promise(r => setTimeout(r, processedFrames[i].time));
             }
             
-            addSerialLog('✅ 播放完成');
+            addLog('✅ 播放完成');
             isPlaying = false;
         }
         
-        // ===== 發送回家指令 =====
         async function sendHome() {
             await sendSerialCommand(generateHomeCommand());
-            addSerialLog('🏠 全體回家');
+            addLog('🏠 全體回家');
         }
         
-        // ===== 串口功能 =====
-        async function connectSerialPort() {
+        // ===== 串口功能 - 正常版本 =====
+        async function connectSerial() {
             try {
-                serialPort = await navigator.serial.requestPort();
-                await serialPort.open({ baudRate: parseInt(baudRate.value) });
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: parseInt(baudRate.value) });
                 
-                writer = serialPort.writable.getWriter();
-                reader = serialPort.readable.getReader();
+                writer = port.writable.getWriter();
+                reader = port.readable.getReader();
                 
-                if (serialStatus) {
-                    serialStatus.className = 'serial-status serial-connected';
-                    serialStatus.innerHTML = '🟢 已連接 - ' + baudRate.value + ' baud';
-                }
+                serialStatus.className = 'serial-status serial-connected';
+                serialStatus.innerHTML = '🟢 已連接';
                 
-                if (disconnectSerial) disconnectSerial.disabled = false;
-                if (customCommand) customCommand.disabled = false;
-                if (sendCustomBtn) sendCustomBtn.disabled = false;
-                if (connectSerial) connectSerial.disabled = true;
+                disconnectBtn.disabled = false;
+                connectBtn.disabled = true;
+                customCommand.disabled = false;
+                sendCustomBtn.disabled = false;
                 
-                addSerialLog('✅ 串口連接成功');
-                readSerial();
+                addLog('✅ 串口連接成功');
+                readLoop();
                 
             } catch (error) {
-                addSerialLog('❌ 連接失敗: ' + error.message);
+                addLog('❌ 連接失敗: ' + error.message);
             }
         }
         
-        async function disconnectSerialPort() {
+        async function disconnectSerial() {
             try {
-                if (writer) await writer.close();
                 if (reader) await reader.cancel();
-                if (serialPort) await serialPort.close();
+                if (writer) await writer.close();
+                if (port) await port.close();
                 
-                writer = null;
-                reader = null;
-                serialPort = null;
+                reader = null; writer = null; port = null;
                 
-                if (serialStatus) {
-                    serialStatus.className = 'serial-status serial-disconnected';
-                    serialStatus.innerHTML = '🔴 未連接';
-                }
+                serialStatus.className = 'serial-status serial-disconnected';
+                serialStatus.innerHTML = '🔴 未連接';
                 
-                if (disconnectSerial) disconnectSerial.disabled = true;
-                if (customCommand) customCommand.disabled = true;
-                if (sendCustomBtn) sendCustomBtn.disabled = true;
-                if (connectSerial) connectSerial.disabled = false;
+                disconnectBtn.disabled = true;
+                connectBtn.disabled = false;
+                customCommand.disabled = true;
+                sendCustomBtn.disabled = true;
                 
-                addSerialLog('🔌 串口已斷開');
+                addLog('🔌 串口已斷開');
             } catch (error) {
-                addSerialLog('❌ 斷開失敗: ' + error.message);
+                addLog('❌ 斷開失敗: ' + error.message);
             }
         }
         
-        async function readSerial() {
-            while (serialPort && serialPort.readable) {
+        async function readLoop() {
+            while (port && port.readable) {
                 try {
                     const { value, done } = await reader.read();
                     if (done) break;
                     const text = new TextDecoder().decode(value);
-                    if (text.trim()) addSerialLog('📥 ' + text.trim());
+                    if (text.trim()) addLog('📥 ' + text.trim());
                 } catch (error) {
-                    addSerialLog('❌ 讀取錯誤: ' + error.message);
+                    addLog('❌ 讀取錯誤: ' + error.message);
                     break;
                 }
             }
@@ -1949,15 +1813,15 @@
         
         async function sendSerialCommand(cmd) {
             if (!writer) {
-                addSerialLog('❌ 串口未連接');
+                addLog('❌ 串口未連接');
                 return false;
             }
             try {
                 await writer.write(new TextEncoder().encode(cmd + '\n'));
-                addSerialLog('📤 ' + cmd);
+                addLog('📤 ' + cmd);
                 return true;
             } catch (error) {
-                addSerialLog('❌ 發送失敗: ' + error.message);
+                addLog('❌ 發送失敗: ' + error.message);
                 return false;
             }
         }
@@ -1970,27 +1834,20 @@
             }
         }
         
-        function addSerialLog(message) {
+        function addLog(message) {
             if (!serialLog) return;
             const time = new Date().toLocaleTimeString();
             serialLog.innerHTML += `<div>[${time}] ${message}</div>`;
             serialLog.scrollTop = serialLog.scrollHeight;
         }
         
-        function mapValue(value, inMin, inMax, outMin, outMax) {
-            return ((value - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
-        }
-        
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => alert('✅ 已複製！')).catch(() => alert('❌ 複製失敗'));
         }
         
-        // ===== 啟動 =====
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', init);
-        } else {
-            init();
-        }
+        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+        
+        init();
     </script>
 </body>
 </html>
