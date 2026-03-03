@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>プリメイドAI 控制器 (舊版風格)</title>
+    <title>プリメイドAI 控制器 (MV修正/LOG+GYRO複製)</title>
     <style>
-        /* 舊版風格：長方形按鈕，無上方hotkey提示列 */
         * {
             box-sizing: border-box;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -39,10 +38,9 @@
             display: block;
         }
 
-        /* 頂部控制列 - 脫力按鈕放在同一行 */
         .top-control-bar {
             background: #16213e;
-            border-radius: 4px;          /* 舊版方形感 */
+            border-radius: 4px;
             padding: 10px 15px;
             display: flex;
             gap: 10px;
@@ -55,7 +53,7 @@
             color: #1a1a2e;
             border: none;
             padding: 6px 14px;
-            border-radius: 4px;           /* 長方形 (舊版) */
+            border-radius: 4px;
             cursor: pointer;
             font-weight: bold;
             font-size: 13px;
@@ -82,8 +80,12 @@
             background: #ffaa00;
             color: black;
         }
-        .btn-free {                         /* 脫力按鈕統一紫色 */
+        .btn-free {
             background: #9b59b6;
+            color: white;
+        }
+        .btn-primary {
+            background: #1971c2;
             color: white;
         }
         .btn:disabled {
@@ -112,8 +114,28 @@
             background: #0f3460;
             margin: 0 5px;
         }
+        .mode-selector {
+            display: flex;
+            gap: 5px;
+            background: #0f3460;
+            padding: 3px;
+            border-radius: 4px;
+        }
+        .mode-btn {
+            background: transparent;
+            color: #aaa;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .mode-btn.active {
+            background: #00d4ff;
+            color: #1a1a2e;
+            font-weight: bold;
+        }
 
-        /* 主區域 */
         .main-layout {
             display: flex;
             gap: 12px;
@@ -121,7 +143,6 @@
             min-height: 0;
         }
 
-        /* 左側部位導航 (舊版方形按鈕) */
         .robot-diagram {
             width: 180px;
             background: #16213e;
@@ -134,7 +155,7 @@
         .part-button {
             width: 100%;
             padding: 12px;
-            border-radius: 4px;            /* 方形 */
+            border-radius: 4px;
             border: none;
             cursor: pointer;
             font-size: 1.1em;
@@ -157,7 +178,6 @@
             box-shadow: 0 0 10px #00d4ff;
         }
 
-        /* 右側控制面板 */
         .control-panel {
             flex: 1;
             background: #16213e;
@@ -188,14 +208,12 @@
             color: #aaa;
         }
 
-        /* 伺服容器 */
         .servo-container {
             flex: 1;
             overflow-y: auto;
             padding-right: 5px;
         }
 
-        /* 左右分欄 (手/腳用) */
         .split-panel {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -218,10 +236,9 @@
             border-radius: 4px;
         }
 
-        /* 伺服列 (舊版無圓角) */
         .servo-row {
             background: #0f3460;
-            border-radius: 4px;             /* 方形 */
+            border-radius: 4px;
             padding: 8px;
             display: flex;
             align-items: center;
@@ -261,11 +278,11 @@
             align-items: center;
             flex-wrap: wrap;
         }
-        .pma-id {
+        .binary-id {
             background: #00d4ff22;
             color: #00d4ff;
             padding: 2px 6px;
-            border-radius: 4px;              /* 方形小標籤 */
+            border-radius: 4px;
         }
         .home-star {
             color: #ffaa00;
@@ -275,7 +292,7 @@
             background: #00d4ff;
             color: #1a1a2e;
             padding: 2px 8px;
-            border-radius: 4px;               /* 方形快捷鍵 */
+            border-radius: 4px;
             font-size: 10px;
             font-weight: bold;
             cursor: pointer;
@@ -284,7 +301,6 @@
             background: #ffaa00;
         }
 
-        /* 控制項 */
         .controls-wrapper {
             flex: 3;
             display: flex;
@@ -297,7 +313,7 @@
             gap: 3px;
             background: #1a1a2e;
             padding: 2px 5px;
-            border-radius: 4px;                /* 方形 */
+            border-radius: 4px;
         }
         .angle-control {
             border-left: 2px solid #00d4ff;
@@ -316,7 +332,7 @@
             border: none;
             width: 22px;
             height: 22px;
-            border-radius: 4px;                /* 方形按鈕 */
+            border-radius: 4px;
             font-weight: bold;
             cursor: pointer;
             display: flex;
@@ -340,7 +356,7 @@
         .angle-input, .speed-input {
             background: #1a1a2e;
             border: 1px solid;
-            border-radius: 4px;                /* 方形輸入框 */
+            border-radius: 4px;
             padding: 3px 3px;
             font-family: monospace;
             font-size: 0.85em;
@@ -358,17 +374,16 @@
             width: 45px;
         }
 
-        /* 底部雙欄 (GYRO + LOG) */
         .bottom-dual {
             display: flex;
             gap: 12px;
-            height: 150px;
+            height: 180px;
             flex-shrink: 0;
         }
         .gyro-section, .log-section {
             flex: 1;
             background: #16213e;
-            border-radius: 4px;                /* 方形 */
+            border-radius: 4px;
             padding: 10px;
             display: flex;
             flex-direction: column;
@@ -407,8 +422,20 @@
         }
         .log-sent { color: #00d4ff; }
         .log-received { color: #00cc66; }
+        .copy-btn {
+            background: #0f3460;
+            color: #aaa;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .copy-btn:hover {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
 
-        /* 滾動條 (細小) */
         ::-webkit-scrollbar {
             width: 4px;
         }
@@ -417,48 +444,48 @@
         }
         ::-webkit-scrollbar-thumb {
             background: #00d4ff;
-            border-radius: 0px;                /* 方形滾動條 */
+            border-radius: 0px;
         }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>🤖 プリメイドAI 舊版風格控制器 <small>HOME速度30 / 脫力:頭雙手雙腳</small></h1>
+    <h1>🤖 プリメイドAI 控制器 <small>binaryID: HV1-14, MV21-31 / LOG+GYRO可複製</small></h1>
 
-    <!-- 頂部工具列：連接＋脫力全部在同一行 (無hotkey提示) -->
     <div class="top-control-bar">
         <button class="btn" id="connectBtn">🔌 連接</button>
         <button class="btn btn-danger" id="disconnectBtn" disabled>❌ 斷開</button>
-        <button class="btn btn-warning" id="scanBtn">🔍 掃描</button>
-        <button class="btn btn-success" id="testBtn">📡 測試</button>
+        <button class="btn btn-success" id="scanBtn">🔍 掃描</button>
         <span class="separator"></span>
 
-        <!-- HOME 按鈕群 (速度30) -->
+        <div class="mode-selector">
+            <button class="mode-btn active" id="modeASCII">📝 ASCII</button>
+            <button class="mode-btn" id="modeICS">🔢 ICS 二進制</button>
+        </div>
+        <span class="separator"></span>
+
         <button class="btn btn-home" id="homeAllBtn">🏠 全部HOME</button>
         <button class="btn btn-home" id="homeHeadBtn">👤 頭HOME</button>
         <button class="btn btn-home" id="homeHandBtn">🖐️ 手HOME</button>
         <button class="btn btn-home" id="homeLegBtn">🦶 腳HOME</button>
         <span class="separator"></span>
 
-        <!-- 脫力按鈕：頭、雙手、雙腳 (無全身) 快捷鍵 8 9 10 標註在文字上 -->
-        <button class="btn btn-free" id="freeHeadBtn">💤 頭脫力 [8]</button>
-        <button class="btn btn-free" id="freeHandBtn">💤 雙手脫力 [9]</button>
-        <button class="btn btn-free" id="freeLegBtn">💤 雙腳脫力 [10]</button>
+        <button class="btn btn-free" id="freeHeadBtn">💤 頭脫力</button>
+        <button class="btn btn-free" id="freeHandBtn">💤 雙手脫力</button>
+        <button class="btn btn-free" id="freeLegBtn">💤 雙腳脫力</button>
+        <button class="btn btn-primary" id="gyroBtn">📊 陀螺儀</button>
 
         <div class="status" id="status">⚡ 未連接</div>
         <div class="selected-servo-hint" id="selectedHint">⚡ 未選中伺服</div>
     </div>
 
-    <!-- 主體 -->
     <div class="main-layout">
-        <!-- 左側部位導航 (無hotkey提示) -->
         <div class="robot-diagram">
             <button class="part-button head active" id="navHead">👤 頭部</button>
             <button class="part-button hand" id="navHand">🖐️ 手部</button>
             <button class="part-button leg" id="navLeg">🦶 腳部</button>
         </div>
 
-        <!-- 右側控制面板 (動態產生) -->
         <div class="control-panel" id="controlPanel">
             <div class="panel-header">
                 <span class="panel-title" id="panelTitle">👤 頭部控制</span>
@@ -468,68 +495,76 @@
         </div>
     </div>
 
-    <!-- 底部 GYRO + LOG -->
     <div class="bottom-dual">
         <div class="gyro-section">
             <div class="gyro-header">
                 <div class="gyro-title">📊 陀螺儀</div>
-                <button class="btn" id="clearGyroBtn" style="padding:2px 8px;">清除</button>
+                <div>
+                    <button class="copy-btn" id="copyGyroBtn">📋 複製</button>
+                    <button class="copy-btn" id="clearGyroBtn">清除</button>
+                </div>
             </div>
             <div class="gyro-content" id="gyroContent">等待陀螺儀數據…</div>
         </div>
         <div class="log-section">
             <div class="log-header">
                 <div class="log-title">📋 通訊記錄</div>
-                <button class="btn" id="clearLogBtn" style="padding:2px 8px;">清除</button>
+                <div>
+                    <button class="copy-btn" id="copyLogBtn">📋 複製</button>
+                    <button class="copy-btn" id="clearLogBtn">清除</button>
+                </div>
             </div>
-            <div class="log-content" id="logContent">[系統] 舊版控制器啟動 (HOME速度30)</div>
+            <div class="log-content" id="logContent">[系統] 控制器啟動 (HOME速度30)</div>
         </div>
     </div>
 </div>
 
 <script>
     (function() {
-        // ========== 根據 new homepoint.txt 建立的伺服資料庫 ==========
+        // ========== 新homepoint + 新binaryID (HV:1-14, MV:21-31) ==========
         const SERVOS = [
-            // 頭 (MV)
-            { id:1, pma:'02', nameZh:'頭部俯仰', min:7200, max:8400, home:7500, group:'MV', part:'head', shortKey:{ dec:'q', inc:'w' }, speed:30 },
-            { id:2, pma:'03', nameZh:'頭部左右', min:5000, max:10000, home:7500, group:'MV', part:'head', shortKey:{ dec:'e', inc:'r' }, speed:30 },
-            { id:3, pma:'07', nameZh:'頭部萌',   min:6900, max:8100, home:7500, group:'MV', part:'head', shortKey:{ dec:'t', inc:'y' }, speed:30 },
-            // 右手
-            { id:1, pma:'02', nameZh:'右肩 pitch', min:4300, max:11500, home:10200, group:'HV', part:'rhand', shortKey:{ dec:'q', inc:'w' }, speed:30 },
-            { id:4, pma:'09', nameZh:'右肩 roll',  min:7450, max:10350, home:9800, group:'MV', part:'rhand', shortKey:{ dec:'e', inc:'r' }, speed:30 },
-            { id:6, pma:'0D', nameZh:'右上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'t', inc:'y' }, speed:30 },
-            { id:8, pma:'11', nameZh:'右肘 pitch', min:7100, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'u', inc:'i' }, speed:30 },
-            { id:10, pma:'15', nameZh:'右手腕 yaw', min:3500, max:11500, home:5000, group:'MV', part:'rhand', shortKey:{ dec:'o', inc:'p' }, speed:30 },
-            // 左手
-            { id:2, pma:'04', nameZh:'左肩 pitch', min:3500, max:10700, home:4700, group:'HV', part:'lhand', shortKey:{ dec:'a', inc:'s' }, speed:30 },
-            { id:5, pma:'0B', nameZh:'左肩 roll',  min:4550, max:7550, home:5200, group:'MV', part:'lhand', shortKey:{ dec:'d', inc:'f' }, speed:30 },
-            { id:7, pma:'0F', nameZh:'左上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'g', inc:'h' }, speed:30 },
-            { id:9, pma:'13', nameZh:'左肘 pitch', min:4000, max:7900, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'j', inc:'k' }, speed:30 },
-            { id:11, pma:'17', nameZh:'左手腕 yaw', min:3500, max:11500, home:10000, group:'MV', part:'lhand', shortKey:{ dec:'l', inc:';' }, speed:30 },
-            // 右腳 HV (精確home值)
-            { id:3, pma:'06', nameZh:'右髖 yaw',   min:6530, max:9030, home:7780, group:'HV', part:'rleg', shortKey:{ dec:'q', inc:'w' }, speed:30 },
-            { id:5, pma:'0A', nameZh:'右髖 roll',  min:6700, max:8300, home:7400, group:'HV', part:'rleg', shortKey:{ dec:'e', inc:'r' }, speed:30 },
-            { id:7, pma:'0E', nameZh:'右大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'t', inc:'y' }, speed:30 },
-            { id:9, pma:'12', nameZh:'右膝 pitch', min:3950, max:7600, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'u', inc:'i' }, speed:30 },
-            { id:11, pma:'16', nameZh:'右踝 pitch', min:5700, max:8300, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'o', inc:'p' }, speed:30 },
-            { id:13, pma:'1A', nameZh:'右踝 roll',  min:6800, max:9150, home:7825, group:'HV', part:'rleg', shortKey:{ dec:'[', inc:']' }, speed:30 },
-            // 左腳 HV
-            { id:4, pma:'08', nameZh:'左髖 yaw',   min:6250, max:8750, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'a', inc:'s' }, speed:30 },
-            { id:6, pma:'0C', nameZh:'左髖 roll',  min:6700, max:8300, home:7600, group:'HV', part:'lleg', shortKey:{ dec:'d', inc:'f' }, speed:30 },
-            { id:8, pma:'10', nameZh:'左大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'g', inc:'h' }, speed:30 },
-            { id:10, pma:'14', nameZh:'左膝 pitch', min:7400, max:11050, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'j', inc:'k' }, speed:30 },
-            { id:12, pma:'18', nameZh:'左踝 pitch', min:6750, max:9350, home:7550, group:'HV', part:'lleg', shortKey:{ dec:'l', inc:';' }, speed:30 },
-            { id:14, pma:'1C', nameZh:'左踝 roll',  min:6200, max:8450, home:7450, group:'HV', part:'lleg', shortKey:{ dec:'\'', inc:'\\' }, speed:30 }
+            // 頭 (MV) - ID 21-23
+            { id:21, nameZh:'頭部俯仰', min:7200, max:8400, home:7500, group:'MV', part:'head', shortKey:{ dec:'q', inc:'w' }, speed:30 },
+            { id:22, nameZh:'頭部左右', min:5000, max:10000, home:7500, group:'MV', part:'head', shortKey:{ dec:'e', inc:'r' }, speed:30 },
+            { id:23, nameZh:'頭部萌',   min:6900, max:8100, home:7500, group:'MV', part:'head', shortKey:{ dec:'t', inc:'y' }, speed:30 },
+            // 右手 (HV1, MV24,26,28,30)
+            { id:1, nameZh:'右肩 pitch', min:4300, max:11500, home:10200, group:'HV', part:'rhand', shortKey:{ dec:'q', inc:'w' }, speed:30 },
+            { id:24, nameZh:'右肩 roll',  min:7450, max:10350, home:9800, group:'MV', part:'rhand', shortKey:{ dec:'e', inc:'r' }, speed:30 },
+            { id:26, nameZh:'右上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'t', inc:'y' }, speed:30 },
+            { id:28, nameZh:'右肘 pitch', min:7100, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'u', inc:'i' }, speed:30 },
+            { id:30, nameZh:'右手腕 yaw', min:3500, max:11500, home:5000, group:'MV', part:'rhand', shortKey:{ dec:'o', inc:'p' }, speed:30 },
+            // 左手 (HV2, MV25,27,29,31)
+            { id:2, nameZh:'左肩 pitch', min:3500, max:10700, home:4700, group:'HV', part:'lhand', shortKey:{ dec:'a', inc:'s' }, speed:30 },
+            { id:25, nameZh:'左肩 roll',  min:4550, max:7550, home:5200, group:'MV', part:'lhand', shortKey:{ dec:'d', inc:'f' }, speed:30 },
+            { id:27, nameZh:'左上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'g', inc:'h' }, speed:30 },
+            { id:29, nameZh:'左肘 pitch', min:4000, max:7900, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'j', inc:'k' }, speed:30 },
+            { id:31, nameZh:'左手腕 yaw', min:3500, max:11500, home:10000, group:'MV', part:'lhand', shortKey:{ dec:'l', inc:';' }, speed:30 },
+            // 右腳 HV (3,5,7,9,11,13)
+            { id:3, nameZh:'右髖 yaw',   min:6530, max:9030, home:7780, group:'HV', part:'rleg', shortKey:{ dec:'q', inc:'w' }, speed:30 },
+            { id:5, nameZh:'右髖 roll',  min:6700, max:8300, home:7400, group:'HV', part:'rleg', shortKey:{ dec:'e', inc:'r' }, speed:30 },
+            { id:7, nameZh:'右大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'t', inc:'y' }, speed:30 },
+            { id:9, nameZh:'右膝 pitch', min:3950, max:7600, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'u', inc:'i' }, speed:30 },
+            { id:11, nameZh:'右踝 pitch', min:5700, max:8300, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'o', inc:'p' }, speed:30 },
+            { id:13, nameZh:'右踝 roll',  min:6800, max:9150, home:7825, group:'HV', part:'rleg', shortKey:{ dec:'[', inc:']' }, speed:30 },
+            // 左腳 HV (4,6,8,10,12,14)
+            { id:4, nameZh:'左髖 yaw',   min:6250, max:8750, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'a', inc:'s' }, speed:30 },
+            { id:6, nameZh:'左髖 roll',  min:6700, max:8300, home:7600, group:'HV', part:'lleg', shortKey:{ dec:'d', inc:'f' }, speed:30 },
+            { id:8, nameZh:'左大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'g', inc:'h' }, speed:30 },
+            { id:10, nameZh:'左膝 pitch', min:7400, max:11050, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'j', inc:'k' }, speed:30 },
+            { id:12, nameZh:'左踝 pitch', min:6750, max:9350, home:7550, group:'HV', part:'lleg', shortKey:{ dec:'l', inc:';' }, speed:30 },
+            { id:14, nameZh:'左踝 roll',  min:6200, max:8450, home:7450, group:'HV', part:'lleg', shortKey:{ dec:'\'', inc:'\\' }, speed:30 }
         ];
 
         // ========== 全域變數 ==========
         let currentPart = 'head';
         let port = null, reader = null;
-        let currentAngles = {};          // 存放最新角度
+        let currentAngles = {};
         let selectedServo = null;
         let pressedKeys = new Set();
         let repeatTimer = null, activeServo = null, activeDelta = 0, isKeyHeld = false;
+        let currentMode = 'ASCII';
+
+        SERVOS.forEach(s => { currentAngles[`${s.group}_${s.id}`] = s.home; });
 
         // ========== 輔助函式 ==========
         function addLog(msg, type='info') {
@@ -538,18 +573,88 @@
             const cls = type==='sent'?'log-sent':type==='received'?'log-received':'';
             log.innerHTML += `<div><span class="${cls}">[${time}] ${msg}</span></div>`;
             log.scrollTop = log.scrollHeight;
-            if(log.children.length>40) log.removeChild(log.firstChild);
+            if(log.children.length>100) log.removeChild(log.firstChild);
         }
         function addGyro(msg) {
             const g = document.getElementById('gyroContent');
             const time = new Date().toLocaleTimeString();
             g.innerHTML += `<div>[${time}] ${msg}</div>`;
             g.scrollTop = g.scrollHeight;
-            if(g.children.length>10) g.removeChild(g.firstChild);
+            if(g.children.length>30) g.removeChild(g.firstChild);
         }
         function delay(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
-        // ========== 渲染面板 (舊版無hotkey提示) ==========
+        // ========== 模式切換 ==========
+        document.getElementById('modeASCII').addEventListener('click', ()=>{
+            currentMode = 'ASCII';
+            document.getElementById('modeASCII').classList.add('active');
+            document.getElementById('modeICS').classList.remove('active');
+            addLog('🔤 切換至 ASCII 模式');
+        });
+        document.getElementById('modeICS').addEventListener('click', ()=>{
+            currentMode = 'ICS';
+            document.getElementById('modeICS').classList.add('active');
+            document.getElementById('modeASCII').classList.remove('active');
+            addLog('🔢 切換至 ICS 二進制模式');
+        });
+
+        // ========== 發送指令 (根據模式) ==========
+        async function sendCommand(group, id, angle, speed) {
+            if(!port) { addLog('❌ 未連接','error'); return false; }
+            try {
+                const writer = port.writable.getWriter();
+                if(currentMode === 'ASCII') {
+                    const cmd = `S ${group} ${id} ${angle} ${speed}`;
+                    await writer.write(new TextEncoder().encode(cmd + '\n'));
+                    addLog('📤 ' + cmd, 'sent');
+                } else {
+                    const binaryId = id;
+                    const high = (angle >> 7) & 0x7F;
+                    const low = angle & 0x7F;
+                    const packet = [0x07, 0x18, speed, binaryId, high, low];
+                    let xor = 0;
+                    for(let b of packet) xor ^= b;
+                    packet.push(xor);
+                    await writer.write(new Uint8Array(packet));
+                    const hex = packet.map(b=>b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+                    addLog('📤 [ICS] ' + hex, 'sent');
+                }
+                writer.releaseLock();
+                return true;
+            } catch(e) { addLog(`❌ 發送失敗 ${e.message}`,'error'); return false; }
+        }
+
+        // ========== 多軸指令 ==========
+        async function sendMulti(servoList, speed) {
+            if(!port) { alert('請先連接'); return; }
+            try {
+                const writer = port.writable.getWriter();
+                if(currentMode === 'ASCII') {
+                    let cmd = `S MULTI ${speed} ${servoList.length}`;
+                    for(let s of servoList) {
+                        cmd += ` ${s.group}${s.id} ${s.angle}`;
+                    }
+                    await writer.write(new TextEncoder().encode(cmd + '\n'));
+                    addLog('📤 ' + cmd, 'sent');
+                } else {
+                    const packet = [4 + servoList.length * 3, 0x18, speed];
+                    for(let s of servoList) {
+                        packet.push(s.id);
+                        packet.push((s.angle >> 7) & 0x7F);
+                        packet.push(s.angle & 0x7F);
+                    }
+                    let xor = 0;
+                    for(let b of packet) xor ^= b;
+                    packet.push(xor);
+                    await writer.write(new Uint8Array(packet));
+                    const hex = packet.map(b=>b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+                    addLog('📤 [ICS] ' + hex, 'sent');
+                }
+                writer.releaseLock();
+            } catch(e) { addLog(`❌ 發送失敗 ${e.message}`,'error'); }
+        }
+
+        // ========== 渲染 ==========
         function renderPanel(part) {
             currentPart = part;
             document.querySelectorAll('.part-button').forEach(b=>b.classList.remove('active'));
@@ -557,7 +662,6 @@
 
             let title = part==='head'? '👤 頭部控制' : part==='hand'? '🖐️ 手部控制' : '🦶 腳部控制';
             document.getElementById('panelTitle').innerText = title;
-            document.getElementById('panelMeta').innerText = ''; // 不顯示多餘提示
 
             let html = '';
             if (part === 'head') {
@@ -591,8 +695,8 @@
                     <div class="servo-info">
                         <div class="servo-name">${s.nameZh}</div>
                         <div class="servo-detail">
-                            <span class="pma-id">PMA ${s.pma}</span>
-                            <span>${s.group}${s.id}</span>
+                            <span class="binary-id">ID:${s.id}</span>
+                            <span>${s.group}</span>
                             ${s.home!==7500?'<span class="home-star">★</span>':''}
                             <span class="shortkey-badge" onclick="window.selectByKey('${s.shortKey.dec}')">${decKey}</span>
                             <span class="shortkey-badge" onclick="window.selectByKey('${s.shortKey.inc}')">${incKey}</span>
@@ -617,14 +721,35 @@
 
         function attachInputEvents() {
             document.querySelectorAll('.angle-input').forEach(inp => {
+                inp.addEventListener('click', e => e.target.select());
+                inp.addEventListener('focus', e => e.target.select());
+                inp.addEventListener('keypress', e => {
+                    if(e.key === 'Enter') {
+                        e.preventDefault();
+                        inp.blur();
+                    }
+                });
                 inp.addEventListener('blur', e => {
                     const g = inp.dataset.group, id = parseInt(inp.dataset.id);
                     let val = parseInt(inp.value);
-                    if(isNaN(val)) { const s=SERVOS.find(s=>s.group===g&&s.id===id); if(s) inp.value=s.home; return; }
+                    if(isNaN(val)) { 
+                        const s=SERVOS.find(s=>s.group===g&&s.id===id); 
+                        if(s) inp.value = s.home; 
+                        return; 
+                    }
                     sendExactAngle(g,id,val);
                 });
             });
+            
             document.querySelectorAll('.speed-input').forEach(inp => {
+                inp.addEventListener('click', e => e.target.select());
+                inp.addEventListener('focus', e => e.target.select());
+                inp.addEventListener('keypress', e => {
+                    if(e.key === 'Enter') {
+                        e.preventDefault();
+                        inp.blur();
+                    }
+                });
                 inp.addEventListener('blur', e => {
                     const g = inp.dataset.group, id = parseInt(inp.dataset.id);
                     let sp = parseInt(inp.value);
@@ -657,18 +782,7 @@
             if(s) { selectedServo = s; highlightSelected(); addLog(`✅ 選中 ${s.nameZh}`,'info'); }
         };
 
-        // ========== 指令發送 ==========
-        async function sendRaw(cmd) {
-            if(!port) { addLog('❌ 未連接','error'); return false; }
-            try {
-                const w = port.writable.getWriter();
-                await w.write(new TextEncoder().encode(cmd + '\n'));
-                w.releaseLock();
-                addLog('📤 ' + cmd, 'sent');
-                return true;
-            } catch(e) { addLog(`❌ 發送失敗 ${e.message}`,'error'); return false; }
-        }
-
+        // ========== 操作 ==========
         window.sendDelta = async function(group, id, delta) {
             if(!port) { alert('請先連接'); return; }
             const s = SERVOS.find(s=>s.group===group && s.id===id);
@@ -679,7 +793,7 @@
             if(nv < s.min) nv = s.min; if(nv > s.max) nv = s.max;
             inp.value = nv;
             currentAngles[`${group}_${id}`] = nv;
-            await sendRaw(`S ${group} ${id} ${nv} ${s.speed}`);
+            await sendCommand(group, id, nv, s.speed);
             const row = document.getElementById(`row_${group}_${id}`);
             if(row) {
                 row.classList.add(delta<0?'active-dec':'active-inc');
@@ -693,7 +807,7 @@
             if(val < s.min) val = s.min; if(val > s.max) val = s.max;
             document.getElementById(`input_${group}_${id}`).value = val;
             currentAngles[`${group}_${id}`] = val;
-            await sendRaw(`S ${group} ${id} ${val} ${s.speed}`);
+            await sendCommand(group, id, val, s.speed);
         }
 
         window.adjustSp = function(group,id,delta) {
@@ -708,22 +822,54 @@
                 document.getElementById('selectedHint').innerText = `⚡ 選中: ${s.nameZh} 速度${ns}`;
         };
 
-        // ========== HOME 功能 (S MULTI 速度30) ==========
+        // ========== HOME 功能 ==========
         async function homeMulti(servoList, name) {
             if(!port) { alert('請先連接'); return; }
             if(servoList.length===0) return;
-            let cmd = `S MULTI 30 ${servoList.length}`;
-            for(let s of servoList) {
-                cmd += ` ${s.group}${s.id} ${s.home}`;
-                const inp = document.getElementById(`input_${s.group}_${s.id}`);
-                if(inp) inp.value = s.home;
-                currentAngles[`${s.group}_${s.id}`] = s.home;
+            
+            const targets = servoList.map(s => ({ 
+                group: s.group, 
+                id: s.id,
+                angle: s.home 
+            }));
+            
+            for(let t of targets) {
+                const inp = document.getElementById(`input_${t.group}_${t.id}`);
+                if(inp) inp.value = t.angle;
+                currentAngles[`${t.group}_${t.id}`] = t.angle;
             }
-            await sendRaw(cmd);
-            addLog(`🏠 ${name} HOME (S MULTI 30) 完成`,'received');
+            
+            if(currentMode === 'ASCII') {
+                let cmd = `S MULTI 30 ${targets.length}`;
+                for(let t of targets) cmd += ` ${t.group}${t.id} ${t.angle}`;
+                await sendRaw(cmd);
+            } else {
+                const packet = [4 + targets.length * 3, 0x18, 30];
+                for(let t of targets) {
+                    packet.push(t.id);
+                    packet.push((t.angle >> 7) & 0x7F);
+                    packet.push(t.angle & 0x7F);
+                }
+                let xor = 0; 
+                for(let b of packet) xor ^= b; 
+                packet.push(xor);
+                
+                const writer = port.writable.getWriter();
+                await writer.write(new Uint8Array(packet));
+                writer.releaseLock();
+                
+                const hex = packet.map(b=>b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+                addLog('📤 [ICS] ' + hex, 'sent');
+            }
+            addLog(`🏠 ${name} HOME 完成`,'received');
         }
 
-        // ========== 脫力功能 (僅頭/雙手/雙腳, 無全身) ==========
+        function homeHeadFunc() { homeMulti(SERVOS.filter(s=>s.part==='head'), '頭部'); }
+        function homeHandFunc() { homeMulti(SERVOS.filter(s=>s.part==='rhand'||s.part==='lhand'), '手部'); }
+        function homeLegFunc() { homeMulti(SERVOS.filter(s=>s.part==='rleg'||s.part==='lleg'), '腳部'); }
+        function homeAllFunc() { homeMulti(SERVOS, '全部'); }
+
+        // ========== 脫力 ==========
         async function freePart(servoList, partName) {
             if(!port) { alert('請先連接'); return; }
             for(let s of servoList) {
@@ -732,13 +878,11 @@
             }
             addLog(`💤 ${partName} 脫力完成`,'received');
         }
-
-        // 脫力各部位 (無全身)
         async function freeHead() { await freePart(SERVOS.filter(s=>s.part==='head'), '頭部'); }
         async function freeHand() { await freePart(SERVOS.filter(s=>s.part==='rhand'||s.part==='lhand'), '雙手'); }
         async function freeLeg()  { await freePart(SERVOS.filter(s=>s.part==='rleg'||s.part==='lleg'), '雙腳'); }
 
-        // ========== 長按邏輯 ==========
+        // ========== 長按 ==========
         function startRepeat(s, delta) {
             if(repeatTimer) clearInterval(repeatTimer);
             activeServo = s; activeDelta = delta; isKeyHeld = true;
@@ -749,17 +893,14 @@
         }
         function stopRepeat() { isKeyHeld=false; activeServo=null; if(repeatTimer) { clearInterval(repeatTimer); repeatTimer=null; } }
 
-        // ========== 鍵盤事件 (無上方提示) ==========
+        // ========== 鍵盤 ==========
         document.addEventListener('keydown', (e) => {
             const k = e.key;
             if(document.activeElement?.tagName==='INPUT') return;
 
-            // 脫力快捷鍵 8 9 10
             if(k === '8') { e.preventDefault(); freeHead(); return; }
             if(k === '9') { e.preventDefault(); freeHand(); return; }
-            if(k === '10' || k === '0') { e.preventDefault(); freeLeg(); return; } // 10可能當作0, 但用數字鍵盤0
-
-            // 部位快捷 (無提示)
+            if(k === '0') { e.preventDefault(); freeLeg(); return; }
             if(k === '1') { renderPanel('head'); e.preventDefault(); return; }
             if(k === '2') { renderPanel('hand'); e.preventDefault(); return; }
             if(k === '3') { renderPanel('leg'); e.preventDefault(); return; }
@@ -785,7 +926,7 @@
                 const otherKey = (k===s.shortKey.dec) ? s.shortKey.inc : s.shortKey.dec;
                 if(pressedKeys.has(otherKey)) {
                     stopRepeat();
-                    sendExactAngle(s.group, s.id, s.home);  // HOME組合鍵
+                    sendExactAngle(s.group, s.id, s.home);
                 } else {
                     selectedServo = s;
                     highlightSelected();
@@ -802,13 +943,18 @@
         });
         window.addEventListener('blur', ()=>{ pressedKeys.clear(); stopRepeat(); });
 
-        // ========== HOME 包裝 ==========
-        function homeAllFunc() { homeMulti(SERVOS, '全部'); }
-        function homeHeadFunc() { homeMulti(SERVOS.filter(s=>s.part==='head'), '頭部'); }
-        function homeHandFunc() { homeMulti(SERVOS.filter(s=>s.part==='rhand'||s.part==='lhand'), '手部'); }
-        function homeLegFunc() { homeMulti(SERVOS.filter(s=>s.part==='rleg'||s.part==='lleg'), '腳部'); }
-
         // ========== 串口 ==========
+        async function sendRaw(cmd) {
+            if(!port) { addLog('❌ 未連接','error'); return false; }
+            try {
+                const w = port.writable.getWriter();
+                await w.write(new TextEncoder().encode(cmd + '\n'));
+                w.releaseLock();
+                addLog('📤 ' + cmd, 'sent');
+                return true;
+            } catch(e) { addLog(`❌ 發送失敗 ${e.message}`,'error'); return false; }
+        }
+
         async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
@@ -845,11 +991,29 @@
                             l=l.trim(); if(!l) continue;
                             addLog('📥 '+l,'received');
                             if(l.includes('加速度')||l.includes('陀螺')) addGyro(l);
-                            const m = l.match(/([HM]V) ID (\d+).*?(\d+)/);
-                            if(m) {
-                                let g=m[1], id=parseInt(m[2]), ang=parseInt(m[3]);
-                                const inp = document.getElementById(`input_${g}_${id}`);
-                                if(inp && Math.abs(parseInt(inp.value)-ang)>10) { inp.value=ang; currentAngles[`${g}_${id}`]=ang; }
+                            
+                            // 解析回應, 更新角度顯示 (支援 MV 同 HV)
+                            const mvMatch = l.match(/MV ID (\d+).*?(\d+)/);
+                            if(mvMatch) {
+                                let id = parseInt(mvMatch[1]);
+                                let ang = parseInt(mvMatch[2]);
+                                const binaryId = id + 20; // MV1->21, MV2->22...
+                                const inp = document.getElementById(`input_MV_${binaryId}`);
+                                if(inp && Math.abs(parseInt(inp.value)-ang)>10) { 
+                                    inp.value = ang; 
+                                    currentAngles[`MV_${binaryId}`] = ang; 
+                                }
+                            }
+                            
+                            const hvMatch = l.match(/HV ID (\d+).*?(\d+)/);
+                            if(hvMatch) {
+                                let id = parseInt(hvMatch[1]);
+                                let ang = parseInt(hvMatch[2]);
+                                const inp = document.getElementById(`input_HV_${id}`);
+                                if(inp && Math.abs(parseInt(inp.value)-ang)>10) { 
+                                    inp.value = ang; 
+                                    currentAngles[`HV_${id}`] = ang; 
+                                }
                             }
                         }
                     }
@@ -863,8 +1027,23 @@
             for(let i=1;i<=11;i++) { await sendRaw(`? MV ${i}`); await delay(30); }
             for(let i=1;i<=14;i++) { await sendRaw(`? HV ${i}`); await delay(30); }
         }
-        async function testConnection() { if(port) await sendRaw('? MV 1'); else alert('先連接'); }
-        async function queryGyro() { if(port) { await sendRaw('G'); addGyro('📊 查詢陀螺儀'); } }
+        async function queryGyro() {
+            if(!port) { alert('請先連接'); return; }
+            await sendRaw('G');
+        }
+
+        // ========== 複製功能 ==========
+        document.getElementById('copyLogBtn').addEventListener('click', ()=>{
+            const log = document.getElementById('logContent').innerText;
+            navigator.clipboard.writeText(log);
+            addLog('📋 日誌已複製','info');
+        });
+        
+        document.getElementById('copyGyroBtn').addEventListener('click', ()=>{
+            const gyro = document.getElementById('gyroContent').innerText;
+            navigator.clipboard.writeText(gyro);
+            addGyro('📋 陀螺儀數據已複製');
+        });
 
         // ========== 初始化 ==========
         window.onload = function() {
@@ -876,23 +1055,19 @@
             document.getElementById('connectBtn').onclick = connectSerial;
             document.getElementById('disconnectBtn').onclick = disconnectSerial;
             document.getElementById('scanBtn').onclick = scanServos;
-            document.getElementById('testBtn').onclick = testConnection;
+            document.getElementById('gyroBtn').onclick = queryGyro;
 
             document.getElementById('homeAllBtn').onclick = homeAllFunc;
             document.getElementById('homeHeadBtn').onclick = homeHeadFunc;
             document.getElementById('homeHandBtn').onclick = homeHandFunc;
             document.getElementById('homeLegBtn').onclick = homeLegFunc;
 
-            // 脫力按鈕 (無全身)
             document.getElementById('freeHeadBtn').onclick = freeHead;
             document.getElementById('freeHandBtn').onclick = freeHand;
             document.getElementById('freeLegBtn').onclick = freeLeg;
 
             document.getElementById('clearLogBtn').onclick = ()=>document.getElementById('logContent').innerHTML = '[系統] 記錄已清除';
             document.getElementById('clearGyroBtn').onclick = ()=>document.getElementById('gyroContent').innerHTML = '等待陀螺儀數據…';
-
-            // 加入陀螺儀按鈕 (雖然介面沒有，但可選)
-            // 若需要可自加
         };
     })();
 </script>
