@@ -414,8 +414,8 @@ private:
   IKSolver ik;
   
   // 步行參數
-  float stepLength = 10.0;      // 步長 10mm
-  float stepHeight = 5.0;       // 抬腳高度 5mm
+  float stepLength = 20.0;      // 步長 20mm
+  float stepHeight = 10.0;       // 抬腳高度 10mm
   float hipWidth = 40.0;        // 髖關節寬度
   float cycleTime = 2.0;        // 一個步態週期時間 2秒
   
@@ -428,7 +428,7 @@ private:
   float targetVelY = 0.0;        // 橫移速度 (mm/s)
   float targetTurnRate = 0.0;    // 轉彎速度 (rad/s)
   
-  uint8_t walkSpeed = 30;        // 慢速測試用
+  uint8_t walkSpeed = 40;        // 速度 40
   
   // 當前腳尖位置 (用於安全停止)
   float currentRX = 0, currentRY = 20, currentRZ = 0;
@@ -471,10 +471,9 @@ public:
     float deltaTime = (now - lastUpdate) / 1000.0;
     if (deltaTime > 0.05) deltaTime = 0.02;
     
-    if (targetVelX != 0 || targetVelY != 0 || targetTurnRate != 0) {
-      float speed = max(abs(targetVelX), max(abs(targetVelY), abs(targetTurnRate) * 100));
-      float phaseSpeed = speed / stepLength;
-      phase += phaseSpeed * deltaTime * 2;
+    if (targetVelX != 0) {
+      float phaseSpeed = abs(targetVelX) / stepLength;
+      phase += (targetVelX > 0 ? 1 : -1) * phaseSpeed * deltaTime * 2;
       
       while (phase >= 2.0) phase -= 2.0;
       while (phase < 0) phase += 2.0;
@@ -488,19 +487,18 @@ public:
     float t = phase;
     
     if (t < 1.0) {
-      // 支撐相
-      x = -stepLength * (0.5 - t);
-      y = hipWidth / 2;
+      // 支撐相 - 向後
+      x = -stepLength * (0.5 - t);  // 負數 = 向後
       z = 0;
-      roll = 0;
     } else {
-      // 擺動相
+      // 擺動相 - 向前
       float swingT = t - 1.0;
-      x = stepLength * (0.5 - (1.0 - swingT));
-      y = hipWidth / 2;
+      x = stepLength * (0.5 - (1.0 - swingT));  // 正數 = 向前
       z = stepHeight * sin(swingT * PI);
-      roll = 0;
     }
+    y = hipWidth / 2;
+    roll = 0;
+    
     currentRX = x;
     currentRY = y;
     currentRZ = z;
@@ -510,19 +508,20 @@ public:
   void getLeftFootTarget(float &x, float &y, float &z, float &roll) {
     float t = phase;
     
-    if (t < 1.0) {  // 左腳擺動相 (向前)
+    if (t < 1.0) {
+      // 左腳擺動相 - 向前 (同右腳相反)
       float swingT = t;
-      x = -stepLength * (0.5 - swingT);  // 由後 (-5mm) 去前 (+5mm)
-      y = -hipWidth / 2;
+      x = stepLength * (0.5 - swingT);  // 正數 = 向前
       z = stepHeight * sin(swingT * PI);
-      roll = 0;
-    } else {  // 左腳支撐相 (向後)
+    } else {
+      // 左腳支撐相 - 向後
       float supportT = t - 1.0;
-      x = stepLength * (0.5 - supportT);  // 由前 (+5mm) 去後 (-5mm)
-      y = -hipWidth / 2;
+      x = -stepLength * (0.5 - supportT);  // 負數 = 向後
       z = 0;
-      roll = 0;
     }
+    y = -hipWidth / 2;
+    roll = 0;
+    
     currentLX = x;
     currentLY = y;
     currentLZ = z;
@@ -538,6 +537,11 @@ public:
     getRightFootTarget(rx, ry, rz, rroll);
     getLeftFootTarget(lx, ly, lz, lroll);
     
+    // Debug output - 可以睇到 phase 同 target 值
+    // Serial1.print("phase:"); Serial1.print(phase);
+    // Serial1.print(" RX:"); Serial1.print(rx);
+    // Serial1.print(" LX:"); Serial1.println(lx);
+    
     float turnYaw = 0;
     float bodyRoll = 0;
     
@@ -548,37 +552,24 @@ public:
     bool leftOK = ik.solveLeftLeg(lx, ly, lz, turnYaw, bodyRoll, leftAngles);
     
     if (rightOK && leftOK) {
-      // set 速度
-      icsHV.setSpd(3, walkSpeed);
-      icsHV.setSpd(5, walkSpeed);
-      icsHV.setSpd(7, walkSpeed);
-      icsHV.setSpd(9, walkSpeed);
-      icsHV.setSpd(11, walkSpeed);
-      icsHV.setSpd(13, walkSpeed);
-      
-      icsHV.setSpd(4, walkSpeed);
-      icsHV.setSpd(6, walkSpeed);
-      icsHV.setSpd(8, walkSpeed);
-      icsHV.setSpd(10, walkSpeed);
-      icsHV.setSpd(12, walkSpeed);
-      icsHV.setSpd(14, walkSpeed);
+      // set 速度 - 只 set 需要嘅關節
+      icsHV.setSpd(7, walkSpeed);  // HV7
+      icsHV.setSpd(9, walkSpeed);  // HV9
+      icsHV.setSpd(11, walkSpeed); // HV11
+      icsHV.setSpd(8, walkSpeed);  // HV8
+      icsHV.setSpd(10, walkSpeed); // HV10
+      icsHV.setSpd(12, walkSpeed); // HV12
       
       delay(2);
       
       // set 位置
-      icsHV.setPos(3, rightAngles.hipYaw);
-      icsHV.setPos(5, rightAngles.hipRoll);
       icsHV.setPos(7, rightAngles.hipPitch);
       icsHV.setPos(9, rightAngles.knee);
       icsHV.setPos(11, rightAngles.anklePitch);
-      icsHV.setPos(13, rightAngles.ankleRoll);
       
-      icsHV.setPos(4, leftAngles.hipYaw);
-      icsHV.setPos(6, leftAngles.hipRoll);
       icsHV.setPos(8, leftAngles.hipPitch);
       icsHV.setPos(10, leftAngles.knee);
       icsHV.setPos(12, leftAngles.anklePitch);
-      icsHV.setPos(14, leftAngles.ankleRoll);
       
       return true;
     }
@@ -588,15 +579,15 @@ public:
   
   // ===== 連續行幾步 =====
   void walkSteps(int steps) {
-    float targetPhase = steps;
+    float targetPhase = steps;  // 行 steps 步 = phase 行 steps
     
     while (phase < targetPhase) {
       doOneStep();
-      delay(100);
+      delay(100);  // 每步 0.1 秒
     }
     
     phase = 0;
-    doOneStep();
+    doOneStep();  // 返去企直
   }
   
   // ===== 安全停止 (慢慢落腳再返 home) =====
@@ -624,35 +615,17 @@ public:
       
       if (rightOK && leftOK) {
         // 用慢速 set 位置
-        icsHV.setSpd(3, 20);
-        icsHV.setSpd(5, 20);
-        icsHV.setSpd(7, 20);
-        icsHV.setSpd(9, 20);
-        icsHV.setSpd(11, 20);
-        icsHV.setSpd(13, 20);
-        
-        icsHV.setSpd(4, 20);
-        icsHV.setSpd(6, 20);
-        icsHV.setSpd(8, 20);
-        icsHV.setSpd(10, 20);
-        icsHV.setSpd(12, 20);
-        icsHV.setSpd(14, 20);
-        
+        icsHV.setSpd(7, 20); icsHV.setSpd(9, 20); icsHV.setSpd(11, 20);
+        icsHV.setSpd(8, 20); icsHV.setSpd(10, 20); icsHV.setSpd(12, 20);
         delay(2);
         
-        icsHV.setPos(3, rightAngles.hipYaw);
-        icsHV.setPos(5, rightAngles.hipRoll);
         icsHV.setPos(7, rightAngles.hipPitch);
         icsHV.setPos(9, rightAngles.knee);
         icsHV.setPos(11, rightAngles.anklePitch);
-        icsHV.setPos(13, rightAngles.ankleRoll);
         
-        icsHV.setPos(4, leftAngles.hipYaw);
-        icsHV.setPos(6, leftAngles.hipRoll);
         icsHV.setPos(8, leftAngles.hipPitch);
         icsHV.setPos(10, leftAngles.knee);
         icsHV.setPos(12, leftAngles.anklePitch);
-        icsHV.setPos(14, leftAngles.ankleRoll);
       }
       
       delay(100);  // 0.1秒 x 10 = 1秒
@@ -1550,43 +1523,43 @@ void processCommand(String cmd) {
   // ===== Hotkey 即時控制 =====
   else if (cmd == "W" || cmd == "WALK_F") {
     // 向前
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
-    walkGen.setVelocity(5, 0, 0);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
+    walkGen.setVelocity(20, 0, 0);
     Serial1.println(F("🚶 向前"));
   }
   else if (cmd == "X" || cmd == "WALK_B") {
     // 向後
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
-    walkGen.setVelocity(-5, 0, 0);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
+    walkGen.setVelocity(-20, 0, 0);
     Serial1.println(F("🚶 向後"));
   }
   else if (cmd == "A" || cmd == "WALK_L") {
     // 向左
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
-    walkGen.setVelocity(0, 5, 0);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
+    walkGen.setVelocity(0, 20, 0);
     Serial1.println(F("🚶 向左"));
   }
   else if (cmd == "D" || cmd == "WALK_R") {
     // 向右
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
-    walkGen.setVelocity(0, -5, 0);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
+    walkGen.setVelocity(0, -20, 0);
     Serial1.println(F("🚶 向右"));
   }
   else if (cmd == "Q" || cmd == "TURN_L") {
     // 轉左
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
     walkGen.setVelocity(0, 0, radians(10));  // 每秒轉10度
     Serial1.println(F("🚶 轉左"));
   }
   else if (cmd == "E" || cmd == "TURN_R") {
     // 轉右
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
     walkGen.setVelocity(0, 0, radians(-10));  // 每秒轉10度
     Serial1.println(F("🚶 轉右"));
   }
@@ -1605,20 +1578,20 @@ void processCommand(String cmd) {
     if (steps < 1) steps = 1;
     if (steps > 100) steps = 100;
     
-    walkGen.setWalkParams(10, 5, 2.0);
-    walkGen.setSpeed(30);
+    walkGen.setWalkParams(20, 10, 2.0);
+    walkGen.setSpeed(40);
     
     if (dir == 'F') {
-      walkGen.setVelocity(5, 0, 0);
+      walkGen.setVelocity(20, 0, 0);
       Serial1.print(F("向前行 "));
     } else if (dir == 'B') {
-      walkGen.setVelocity(-5, 0, 0);
+      walkGen.setVelocity(-20, 0, 0);
       Serial1.print(F("向後行 "));
     } else if (dir == 'L') {
-      walkGen.setVelocity(0, 5, 0);
+      walkGen.setVelocity(0, 20, 0);
       Serial1.print(F("向左行 "));
     } else if (dir == 'R') {
-      walkGen.setVelocity(0, -5, 0);
+      walkGen.setVelocity(0, -20, 0);
       Serial1.print(F("向右行 "));
     } else {
       Serial1.println(F("❌ 方向錯誤 (F/B/L/R)"));
