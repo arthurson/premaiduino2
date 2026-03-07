@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PLEN2 → Premaiduino 動作轉換器 (正常版)</title>
+    <title>PLEN2 → Premaiduino 動作轉換器 (重構版)</title>
     <style>
+        /* 完全保留原有樣式，僅移除上方log相關、調整佈局 */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -96,20 +97,9 @@
             border: 1px solid #f5c6cb;
         }
         
+        /* 原有上方 log container 已移除，但保留樣式以防萬一 */
         .serial-log-container {
-            flex: 2;
-            max-width: 500px;
-        }
-        
-        .serial-log {
-            background: #1e1e3f;
-            color: #d4d4d4;
-            padding: 10px;
-            border-radius: 8px;
-            height: 120px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
+            display: none; /* 隱藏原本的串口日誌區塊 */
         }
         
         .main-content {
@@ -127,6 +117,9 @@
         .right-panel {
             flex: 1.5;
             min-width: 600px;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
         }
         
         .upload-section {
@@ -185,12 +178,13 @@
             margin-bottom: 30px;
         }
         
+        /* 伺服設定將移到右邊，故左邊移除該區塊，但保留樣式 */
         .servo-settings {
             background: #f8f9fa;
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
+            width: 100%;
         }
         
         .batch-control {
@@ -198,7 +192,6 @@
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
         }
         
         .upload-area {
@@ -530,7 +523,6 @@
             border-radius: 15px;
             overflow: hidden;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
         }
         
         .tab-header {
@@ -701,13 +693,79 @@
             color: #6c757d;
             border-top: 1px solid #dee2e6;
         }
+
+        /* ===== 獨立大型日誌區塊 (位於自訂指令下方) ===== */
+        .extended-log-area {
+            background: #1e1e3f;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+            border: 1px solid #3a3a5f;
+            width: 100%;
+        }
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            color: #e0e0ff;
+            font-weight: 600;
+            font-size: 1rem;
+            letter-spacing: 0.5px;
+        }
+        .log-header span {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .log-header button {
+            background: transparent;
+            border: 1px solid #6B73FF;
+            color: #b0b9ff;
+            padding: 6px 16px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-left: 8px;
+        }
+        .log-header button:hover {
+            background: #6B73FF;
+            color: white;
+            border-color: #6B73FF;
+        }
+        .log-content {
+            background: #0b0b1f;
+            color: #b0f0b0;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            font-size: 13px;
+            padding: 15px;
+            border-radius: 8px;
+            height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #2a2a4a;
+            line-height: 1.5;
+        }
+        .log-content div {
+            border-bottom: 1px dotted #2f2f4a;
+            padding: 2px 0;
+        }
+        .log-empty-msg {
+            color: #6a6a8b;
+            font-style: italic;
+            text-align: center;
+            padding: 30px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🤖 PLEN2 → Premaiduino 動作轉換器</h1>
-            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出｜正常版</p>
+            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出｜重構版</p>
         </div>
         
         <div class="serial-top">
@@ -726,10 +784,9 @@
             <div id="serialStatus" class="serial-status serial-disconnected">
                 🔴 未連接
             </div>
+            <!-- 上方 log container 已隱藏 (display:none) 但結構保留 -->
             <div class="serial-log-container">
-                <div class="serial-log" id="serialLog">
-                    📋 串口日誌...
-                </div>
+                <div class="serial-log" id="serialLog" style="display:none;"></div>
             </div>
         </div>
         
@@ -811,12 +868,12 @@
                     <div class="speed-slider-container">
                         <div class="speed-label">
                             <span>速度倍率</span>
-                            <span id="speedDisplay" class="speed-value">0.30x</span>
+                            <span id="speedDisplay" class="speed-value">0.40x</span>
                         </div>
-                        <input type="range" id="speedSlider" min="0.1" max="1.5" step="0.05" value="0.30">
+                        <input type="range" id="speedSlider" min="0.1" max="1.5" step="0.05" value="0.40">
                         <div style="display: flex; justify-content: space-between; color: #888; margin-top: 5px;">
                             <span>0.1x</span>
-                            <span>0.3x (預設)</span>
+                            <span>0.4x (預設)</span>
                             <span>0.5x</span>
                             <span>1.0x</span>
                             <span>1.5x</span>
@@ -825,38 +882,13 @@
                     
                     <div class="preset-buttons">
                         <button class="preset-btn" id="speed01Btn">0.1x</button>
-                        <button class="preset-btn" id="speed03Btn">0.3x (預設)</button>
+                        <button class="preset-btn" id="speed03Btn">0.4x (預設)</button>
                         <button class="preset-btn" id="speed05Btn">0.5x</button>
                         <button class="preset-btn" id="speed10Btn">1.0x</button>
                         <button class="preset-btn" id="speed15Btn">1.5x</button>
                     </div>
                 </div>
-                
-                <div class="servo-settings">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <h3 style="color: #495057;">🛠️ 伺服設定</h3>
-                        <button class="btn btn-info" id="renewBtn" disabled>🔄 更新轉換</button>
-                    </div>
-                    <p style="font-size: 13px; color: #6c757d; margin-bottom: 15px;">
-                        每個伺服可以獨立設定 Home Point 同反轉，按 <strong>更新轉換</strong> 重新計算
-                        <span id="changedIndicator" style="display: none;">⚡ 已更改</span>
-                    </p>
-                    <div style="max-height: 350px; overflow-y: auto;">
-                        <table class="servo-table">
-                            <thead>
-                                <tr>
-                                    <th>群組</th>
-                                    <th>binaryID</th>
-                                    <th>中文名稱</th>
-                                    <th>Home Point</th>
-                                    <th>範圍</th>
-                                    <th>反轉</th>
-                                </tr>
-                            </thead>
-                            <tbody id="servoTableBody"></tbody>
-                        </table>
-                    </div>
-                </div>
+                <!-- 左側原本的伺服設定區塊已移除，移到右側 -->
             </div>
             
             <div class="right-panel">
@@ -938,15 +970,57 @@
                     </div>
                 </div>
                 
-                <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <!-- 自訂指令區 -->
+                <div style="display: flex; gap: 10px;">
                     <input type="text" id="customCommand" class="serial-input" placeholder="輸入自訂指令" style="flex:1; padding:10px; border:1px solid #ced4da; border-radius:4px;">
                     <button class="btn btn-primary" id="sendCustomBtn">📤 發送</button>
+                </div>
+
+                <!-- 新增大日誌區塊 (save改為copy) -->
+                <div class="extended-log-area" id="extendedLogArea">
+                    <div class="log-header">
+                        <span>📋 完整通訊日誌 (可清除/複製)</span>
+                        <div>
+                            <button id="clearLogBtn">🗑️ 清除</button>
+                            <button id="copyLogBtn">📋 複製</button>
+                        </div>
+                    </div>
+                    <div class="log-content" id="extendedLogContent">
+                        <div class="log-empty-msg">📭 暫無日誌，操作後會顯示...</div>
+                    </div>
+                </div>
+
+                <!-- 伺服設定移到日誌下方 -->
+                <div class="servo-settings">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="color: #495057;">🛠️ 伺服設定</h3>
+                        <button class="btn btn-info" id="renewBtn" disabled>🔄 更新轉換</button>
+                    </div>
+                    <p style="font-size: 13px; color: #6c757d; margin-bottom: 15px;">
+                        每個伺服可以獨立設定 Home Point 同反轉，按 <strong>更新轉換</strong> 重新計算
+                        <span id="changedIndicator" style="display: none;">⚡ 已更改</span>
+                    </p>
+                    <div style="max-height: 350px; overflow-y: auto;">
+                        <table class="servo-table">
+                            <thead>
+                                <tr>
+                                    <th>群組</th>
+                                    <th>binaryID</th>
+                                    <th>中文名稱</th>
+                                    <th>Home Point</th>
+                                    <th>範圍</th>
+                                    <th>反轉</th>
+                                </tr>
+                            </thead>
+                            <tbody id="servoTableBody"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
         
         <footer>
-            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜正常版 (連接已修復)</p>
+            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜重構版 (Frame0全出，之後只出有改變)</p>
         </footer>
     </div>
     
@@ -981,8 +1055,8 @@
             'HV6': { home: 7600, min: 6700, max: 8300, reverse: true, binaryId: 6 },
             'HV7': { home: 7500, min: 4700, max: 10200, reverse: false, binaryId: 7 },
             'HV8': { home: 7500, min: 4700, max: 10200, reverse: false, binaryId: 8 },
-            'HV9': { home: 7500, min: 3950, max: 7600, reverse: false, binaryId: 9 },
-            'HV10': { home: 7500, min: 7400, max: 11050, reverse: false, binaryId: 10 },
+            'HV9': { home: 7500, min: 3950, max: 7600, reverse: true, binaryId: 9 },
+            'HV10': { home: 7500, min: 7400, max: 11050, reverse: true, binaryId: 10 },
             'HV11': { home: 7500, min: 5700, max: 8300, reverse: true, binaryId: 11 },
             'HV12': { home: 7550, min: 6750, max: 9350, reverse: true, binaryId: 12 },
             'HV13': { home: 7825, min: 6800, max: 9150, reverse: false, binaryId: 13 },
@@ -1023,7 +1097,7 @@
         let currentMode = 'ASCII';
         let servoMoveCount = {};
         let changesMade = false;
-        let logEntries = [];
+        let logEntries = [];        // 儲存完整日誌（包含時間戳）
         
         // DOM 元素
         const uploadArea = document.getElementById('uploadArea');
@@ -1073,15 +1147,22 @@
         const serialStatus = document.getElementById('serialStatus');
         const customCommand = document.getElementById('customCommand');
         const sendCustomBtn = document.getElementById('sendCustomBtn');
-        const serialLog = document.getElementById('serialLog');
+        const serialLog = document.getElementById('serialLog'); // 保留但不使用
         const baudRate = document.getElementById('baudRate');
+        
+        // 新增大日誌元素
+        const extendedLogContent = document.getElementById('extendedLogContent');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const copyLogBtn = document.getElementById('copyLogBtn');
         
         function init() {
             renderServoTable();
             setupEventListeners();
-            addLog('✅ PLEN2 轉換器已啟動 (正常版)');
+            addLog('✅ PLEN2 轉換器已啟動 (重構版)');
             addLog('📊 新ID系統: HV=1-14, MV=21-31');
             addLog('📐 比例可調 (預設 2.96)｜雙模式輸出');
+            addLog('⚡ 速度範圍: 10-127 (10最慢, 127最快)');
+            addLog('🎬 Frame0全出，之後只出有改變');
         }
         
         function setupEventListeners() {
@@ -1215,13 +1296,17 @@
                 });
             });
             
-            // 串口事件 - 用返正常名
+            // 串口事件
             connectBtn.addEventListener('click', connectSerial);
             disconnectBtn.addEventListener('click', disconnectSerial);
             sendCustomBtn.addEventListener('click', sendCustomCommand);
             customCommand.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') sendCustomCommand();
             });
+
+            // 新增大日誌按鈕 (清除 / 複製)
+            clearLogBtn.addEventListener('click', clearExtendedLog);
+            copyLogBtn.addEventListener('click', copyExtendedLog);
         }
         
         function updateModeButtons(activeBtn) {
@@ -1396,7 +1481,7 @@
                 const originalFrame = originalFrames.find(f => f.index === frame.index);
                 if (originalFrame) {
                     const newSpeed = Math.round(originalFrame.originalSpeed * currentSpeedMultiplier);
-                    frame.speed = Math.max(20, Math.min(127, newSpeed));
+                    frame.speed = Math.max(10, Math.min(127, newSpeed));
                     
                     const cmdParts = frame.asciiCommand.split(' ');
                     if (cmdParts.length >= 3) {
@@ -1464,25 +1549,27 @@
             activeServosSet.clear();
             servoMoveCount = {};
             
+            // 先記錄所有有輸出的伺服 (包括值為0的)
             json.frames.forEach(frame => {
                 if (frame.outputs) {
                     frame.outputs.forEach(output => {
-                        if (NAME_MAPPING[output.device] && output.value !== 0) {
+                        if (NAME_MAPPING[output.device]) {
                             activeServosSet.add(NAME_MAPPING[output.device]);
                         }
                     });
                 }
             });
             
+            // 轉換每個 frame
             json.frames.forEach((frame, index) => {
                 const time = frame.transition_time_ms || 500;
-                let speed = Math.round(((time - 100) * (127 - 20)) / (2000 - 100) + 20);
-                speed = Math.max(20, Math.min(127, speed));
+                let speed = Math.round(((2000 - time) * (127 - 10)) / (2000 - 100) + 10);
+                speed = Math.max(10, Math.min(127, speed));
                 
                 let frameValues = {};
                 if (frame.outputs) {
                     frame.outputs.forEach(output => {
-                        if (NAME_MAPPING[output.device] && output.value !== 0) {
+                        if (NAME_MAPPING[output.device]) {
                             const servoId = NAME_MAPPING[output.device];
                             frameValues[servoId] = convertAngle(output.value, servoId);
                             if (!servoMoveCount[servoId]) servoMoveCount[servoId] = 0;
@@ -1495,6 +1582,7 @@
                 });
             });
             
+            // 計算移動次數 (用於統計)
             let lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const currentValues = originalFrames[i].values;
@@ -1506,20 +1594,33 @@
                 lastValues = {...currentValues};
             }
             
+            // 生成每個 frame 的指令
             lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const frame = originalFrames[i];
                 const currentValues = frame.values;
                 
                 let servoData = [];
-                Object.keys(currentValues).forEach(servoId => {
-                    if (i === 0 || currentValues[servoId] !== lastValues[servoId]) {
+                
+                if (i === 0) {
+                    // Frame 0: 出晒所有 servo (包括數值相同)
+                    Object.keys(currentValues).forEach(servoId => {
                         servoData.push({
                             servoId: servoId,
                             angle: currentValues[servoId]
                         });
-                    }
-                });
+                    });
+                } else {
+                    // Frame 1 之後: 只出有改變嘅 servo
+                    Object.keys(currentValues).forEach(servoId => {
+                        if (currentValues[servoId] !== lastValues[servoId]) {
+                            servoData.push({
+                                servoId: servoId,
+                                angle: currentValues[servoId]
+                            });
+                        }
+                    });
+                }
                 
                 if (servoData.length > 0) {
                     let asciiCmd = `S MULTI ${frame.speed} ${servoData.length}`;
@@ -1750,7 +1851,7 @@
             addLog('🏠 全體回家');
         }
         
-        // ===== 串口功能 - 正常版本 =====
+        // ===== 串口功能 =====
         async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
@@ -1835,10 +1936,40 @@
         }
         
         function addLog(message) {
-            if (!serialLog) return;
             const time = new Date().toLocaleTimeString();
-            serialLog.innerHTML += `<div>[${time}] ${message}</div>`;
-            serialLog.scrollTop = serialLog.scrollHeight;
+            const formatted = `[${time}] ${message}`;
+            logEntries.push(formatted);
+            renderExtendedLog();
+        }
+
+        function renderExtendedLog() {
+            if (!extendedLogContent) return;
+            if (logEntries.length === 0) {
+                extendedLogContent.innerHTML = '<div class="log-empty-msg">📭 暫無日誌，操作後會顯示...</div>';
+                return;
+            }
+            let html = '';
+            logEntries.forEach(entry => {
+                html += `<div>${entry}</div>`;
+            });
+            extendedLogContent.innerHTML = html;
+            extendedLogContent.scrollTop = extendedLogContent.scrollHeight;
+        }
+
+        function clearExtendedLog() {
+            logEntries = [];
+            renderExtendedLog();
+            addLog('🧹 日誌已清除');
+        }
+
+        function copyExtendedLog() {
+            if (logEntries.length === 0) {
+                alert('沒有日誌可複製');
+                return;
+            }
+            const content = logEntries.join('\n');
+            copyToClipboard(content);
+            addLog('📋 日誌已複製到剪貼簿');
         }
         
         function copyToClipboard(text) {
