@@ -27,11 +27,6 @@
  *   HV12: 細數腳尖向下, 大數腳尖向上
  * 
  * 更新日期：2026-03-08
- * 使用者修改：
- * - BREATH_SPEED = 4
- * - BATCH_BUFFER_SIZE = 2048
- * - BATCH_TIMEOUT = 500
- * - SHAKE_ICS 改為直接解析 frame，唔經 Serial1
  */
 
 #include <Arduino.h>
@@ -72,7 +67,7 @@ IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 50);
 
 // ===== Batch Mode 設定 (你改咗) =====
 #define BATCH_BUFFER_SIZE 1024
-#define BATCH_TIMEOUT 500
+#define BATCH_TIMEOUT 300
 
 // ===== MPU6050 相關定義 =====
 #define MPU6050_ADDR 0x68
@@ -178,44 +173,40 @@ void actionShakeBox_ASCII();
 void actionShakeBox_CPP();
 void actionShakeBox_ICS();
 void testSingleLegs();
-
-// ===== IK Solver 類別 (保留你原本嘅版本) =====
+// ===== IK Solver 類別 (重寫版 - 修正縮進和邏輯) =====
 class IKSolver {
 private:
-  const float thighLength = 65.0;   
-  const float shinLength = 65.0;    
-  const float hipWidth = 40.0;      
+  const float thighLength = 65.0;    // 大腿長度 (mm)
+  const float shinLength = 65.0;     // 小腿長度 (mm)
+  const float BASE_Z = 60.0;         // 腳踝到腳底距離 (mm)
+  const float hipWidth = 40.0;       // 髖寬 (mm)
   
-  const uint16_t HOME_HV3 = 7780;   
-  const uint16_t HOME_HV4 = 7500;   
-  const uint16_t HOME_HV5 = 7400;   
-  const uint16_t HOME_HV6 = 7600;   
-  const uint16_t HOME_HV7 = 7500;   
-  const uint16_t HOME_HV8 = 7500;   
-  const uint16_t HOME_HV9 = 7500;   
-  const uint16_t HOME_HV10 = 7500;  
-  const uint16_t HOME_HV11 = 7500;  
-  const uint16_t HOME_HV12 = 7550;  
-  const uint16_t HOME_HV13 = 7825;  
-  const uint16_t HOME_HV14 = 7450;  
+  // Home 位置 (對應 0 度)
+  const uint16_t HOME_HV3 = 7780;    // 右髖yaw
+  const uint16_t HOME_HV4 = 7500;    // 左髖yaw
+  const uint16_t HOME_HV5 = 7400;    // 右髖roll
+  const uint16_t HOME_HV6 = 7600;    // 左髖roll
+  const uint16_t HOME_HV7 = 7500;    // 右髖pitch
+  const uint16_t HOME_HV8 = 7500;    // 左髖pitch
+  const uint16_t HOME_HV9 = 7500;    // 右膝
+  const uint16_t HOME_HV10 = 7500;   // 左膝
+  const uint16_t HOME_HV11 = 7500;   // 右踝pitch
+  const uint16_t HOME_HV12 = 7550;   // 左踝pitch
+  const uint16_t HOME_HV13 = 7825;   // 右踝roll
+  const uint16_t HOME_HV14 = 7450;   // 左踝roll
   
-  // 真實 servo 轉換常數 (3500-11500 = 8000單位對應270度)
-  const float PULSE_PER_DEG = 8000.0 / 270.0;  // = 29.63
+  // Servo 轉換常數 (3500-11500 = 8000單位對應270度)
+  const float PULSE_PER_DEG = 8000.0 / 270.0;  // ≈ 29.63
   
-  // ===== 角度限制 (根據硬件實際範圍) =====
-  const float MAX_HIP_PITCH = radians(85);   // 向前最大 85度
-  const float MIN_HIP_PITCH = radians(-85);  // 向後最大 85度
-  
-  const float MAX_KNEE = radians(115);       // 膝蓋彎曲最大 115度
-  const float MIN_KNEE = radians(0);         // 膝蓋伸直 0度
-  
-  // HV11: 5700-8300, home 7500
-  const float MAX_ANKLE_RIGHT = radians(60);   // 右腳向上 60度
-  const float MIN_ANKLE_RIGHT = radians(-27);  // 右腳向下 27度
-  
-  // HV12: 6750-9350, home 7550
-  const float MAX_ANKLE_LEFT = radians(60);    // 左腳向上 60度
-  const float MIN_ANKLE_LEFT = radians(-27);   // 左腳向下 27度
+  // 角度限制 (根據硬件實際範圍)
+  const float MAX_HIP_PITCH = radians(85);    // 向前最大 85度
+  const float MIN_HIP_PITCH = radians(-85);   // 向後最大 85度
+  const float MAX_KNEE = radians(115);        // 膝蓋彎曲最大 115度
+  const float MIN_KNEE = radians(0);          // 膝蓋伸直 0度
+  const float MAX_ANKLE_RIGHT = radians(60);  // 右腳向上 60度
+  const float MIN_ANKLE_RIGHT = radians(-27); // 右腳向下 27度
+  const float MAX_ANKLE_LEFT = radians(60);   // 左腳向上 60度
+  const float MIN_ANKLE_LEFT = radians(-27);  // 左腳向下 27度
   
 public:
   struct RightLegAngles {
@@ -239,33 +230,39 @@ public:
   bool solveRightLeg(float targetX, float targetY, float targetZ,
                      float bodyYaw, float bodyRoll,
                      RightLegAngles &angles) {
-    
+    // 設置髖部yaw和roll
     angles.hipYaw = hipYawToServoRight(bodyYaw);
     angles.hipRoll = hipRollToServoRight(bodyRoll);
     
+    // 計算腳踝位置
     float x = targetX;
     float y = targetY;
-    float z = targetZ;
+    float z = targetZ + BASE_Z;
     
+    // IK計算
     float distance = sqrt(x*x + z*z);
-    if (distance > thighLength + shinLength || distance < abs(thighLength - shinLength)) {
+    if (distance > thighLength + shinLength + 1.0 || distance < abs(thighLength - shinLength) - 1.0) {
       return false;
     }
     
+    // 膝蓋角度
     float cosKnee = (thighLength*thighLength + shinLength*shinLength - distance*distance) 
                    / (2 * thighLength * shinLength);
-    float kneeAngle = acos(constrain(cosKnee, -1.0, 1.0));
+float kneeAngle = PI - acos(constrain(cosKnee, -1.0, 1.0));  // 轉換為相對角度
     kneeAngle = constrain(kneeAngle, MIN_KNEE, MAX_KNEE);
     
-    float alpha = atan2(x, z);
+    // 髖部pitch角度
+float alpha = atan2(x, -z);  // 修正坐標系統 (z是負數)
     float beta = acos((thighLength*thighLength + distance*distance - shinLength*shinLength) 
                      / (2 * thighLength * distance));
     float hipAngle = alpha - beta;
     hipAngle = constrain(hipAngle, MIN_HIP_PITCH, MAX_HIP_PITCH);
     
+    // 踝部pitch角度
     float ankleAngle = -(hipAngle + kneeAngle);
     ankleAngle = constrain(ankleAngle, MIN_ANKLE_RIGHT, MAX_ANKLE_RIGHT);
     
+    // 轉換為servo值
     angles.hipPitch = hipPitchToServoRight(hipAngle);
     angles.knee = kneeToServoRight(kneeAngle);
     angles.anklePitch = anklePitchToServoRight(ankleAngle);
@@ -277,33 +274,39 @@ public:
   bool solveLeftLeg(float targetX, float targetY, float targetZ,
                     float bodyYaw, float bodyRoll,
                     LeftLegAngles &angles) {
-    
+    // 設置髖部yaw和roll
     angles.hipYaw = hipYawToServoLeft(bodyYaw);
     angles.hipRoll = hipRollToServoLeft(bodyRoll);
     
-    float x = -targetX;
-    float y = -targetY;
-    float z = targetZ;
+    // 計算腳踝位置
+    float x = targetX;
+    float y = targetY;
+    float z = targetZ + BASE_Z;
     
+    // IK計算
     float distance = sqrt(x*x + z*z);
-    if (distance > thighLength + shinLength || distance < abs(thighLength - shinLength)) {
+    if (distance > thighLength + shinLength + 1.0 || distance < abs(thighLength - shinLength) - 1.0) {
       return false;
     }
     
+    // 膝蓋角度
     float cosKnee = (thighLength*thighLength + shinLength*shinLength - distance*distance) 
                    / (2 * thighLength * shinLength);
-    float kneeAngle = acos(constrain(cosKnee, -1.0, 1.0));
+float kneeAngle = PI - acos(constrain(cosKnee, -1.0, 1.0));  // 轉換為相對角度
     kneeAngle = constrain(kneeAngle, MIN_KNEE, MAX_KNEE);
     
-    float alpha = atan2(x, z);
+    // 髖部pitch角度
+float alpha = atan2(x, -z);  // 修正坐標系統 (z是負數)
     float beta = acos((thighLength*thighLength + distance*distance - shinLength*shinLength) 
                      / (2 * thighLength * distance));
     float hipAngle = alpha - beta;
     hipAngle = constrain(hipAngle, MIN_HIP_PITCH, MAX_HIP_PITCH);
     
+    // 踝部pitch角度
     float ankleAngle = -(hipAngle + kneeAngle);
     ankleAngle = constrain(ankleAngle, MIN_ANKLE_LEFT, MAX_ANKLE_LEFT);
     
+    // 轉換為servo值
     angles.hipPitch = hipPitchToServoLeft(hipAngle);
     angles.knee = kneeToServoLeft(kneeAngle);
     angles.anklePitch = anklePitchToServoLeft(ankleAngle);
@@ -313,7 +316,7 @@ public:
   }
   
 private:
-  // ===== 右腿轉換 =====
+  // ===== 右腿轉換函數 =====
   uint16_t hipYawToServoRight(float rad) {
     float deg = degrees(rad);
     int16_t diff = round(deg * PULSE_PER_DEG);
@@ -350,7 +353,7 @@ private:
     return constrain(HOME_HV13 + diff, 6800, 9150);
   }
   
-  // ===== 左腿轉換 =====
+  // ===== 左腿轉換函數 =====
   uint16_t hipYawToServoLeft(float rad) {
     float deg = degrees(rad);
     int16_t diff = -round(deg * PULSE_PER_DEG);
@@ -388,24 +391,25 @@ private:
   }
 };
 
-// ===== 步行軌跡生成器 (保留你原本嘅版本) =====
+// ===== 步行軌跡生成器 (重寫版) =====
 class WalkGenerator {
 private:
   IKSolver ik;
   
-  float stepLength = 20.0;      
-  float stepHeight = 10.0;       
-  float hipWidth = 40.0;        
-  float cycleTime = 2.0;         // 一個完整步態週期 (秒)
+  float stepLength = 40.0;      // 步長 - 增大到40mm
+  float stepHeight = 30.0;      // 抬腳高度 - 增大到30mm
+  float hipWidth = 40.0;        // 髖寬
+  float cycleTime = 2.0;        // 步態週期 (秒)
+  const float BASE_Z = 60.0;    // 腳踝到腳底距離
   
-  float phase = 0.0;            
+  float phase = 0.0;
   unsigned long lastUpdate = 0;
   
-  float targetVelX = 0.0;        
-  float targetVelY = 0.0;        
-  float targetTurnRate = 0.0;    
+  float targetVelX = 0.0;
+  float targetVelY = 0.0;
+  float targetTurnRate = 0.0;
   
-  uint8_t walkSpeed = 40;        
+  uint8_t walkSpeed = 40;
   bool walking = false;
   int stepsRemaining = 0;
   
@@ -468,67 +472,137 @@ public:
     
     lastUpdate = now;
   }
-  
-  void getRightFootTarget(float &x, float &y, float &z, float &roll) {
+void getRightFootTarget(float &x, float &y, float &z, float &roll) {
     float t = phase;
+    
     if (t < 1.0) {
-      x = -stepLength * (0.5 - t);
+      // 支撐相: x從 +stepLength/2 到 -stepLength/2
+      x = stepLength * (0.5 - t);
       y = hipWidth / 2;
-      z = 0;
+      z = -130.0 - BASE_Z;  // 腳底位置
     } else {
+      // 擺動相: x從 -stepLength/2 到 +stepLength/2
       float swingT = t - 1.0;
-      x = stepLength * (0.5 - (1.0 - swingT));
+      x = stepLength * (swingT - 0.5);
       y = hipWidth / 2;
-      z = stepHeight * sin(swingT * PI);
+      z = -130.0 - BASE_Z + stepHeight * sin(swingT * PI);
     }
-    roll = 0;
-    currentRX = x; currentRY = y; currentRZ = z;
+roll = 0;
+    currentRX = x;
+    currentRY = y;
+    currentRZ = z;
   }
   
   void getLeftFootTarget(float &x, float &y, float &z, float &roll) {
     float t = phase;
+    
     if (t < 1.0) {
+      // 擺動相: x從 -stepLength/2 到 +stepLength/2
       float swingT = t;
-      x = stepLength * (0.5 - swingT);
+      x = stepLength * (swingT - 0.5);
       y = -hipWidth / 2;
-      z = stepHeight * sin(swingT * PI);
+      z = -130.0 - BASE_Z + stepHeight * sin(swingT * PI);
     } else {
+      // 支撐相: x從 +stepLength/2 到 -stepLength/2
       float supportT = t - 1.0;
-      x = -stepLength * (0.5 - supportT);
+      x = stepLength * (0.5 - supportT);
       y = -hipWidth / 2;
-      z = 0;
+      z = -130.0 - BASE_Z;
     }
     roll = 0;
-    currentLX = x; currentLY = y; currentLZ = z;
+    currentLX = x;
+    currentLY = y;
+    currentLZ = z;
   }
   
-  bool computeIK() {
+bool computeIK() {
+    Serial1.println(F("DEBUG: computeIK called"));
+    
+    // 调试：打印步态参数
+    Serial1.print(F("DEBUG: stepLength="));
+    Serial1.print(stepLength);
+    Serial1.print(F(" stepHeight="));
+    Serial1.println(stepHeight);
+    
     float rx, ry, rz, rroll;
     float lx, ly, lz, lroll;
     getRightFootTarget(rx, ry, rz, rroll);
     getLeftFootTarget(lx, ly, lz, lroll);
+    Serial1.print(rx);
+    Serial1.print(F(" y="));
+    Serial1.print(ry);
+    Serial1.print(F(" z="));
+    Serial1.println(rz);
+    
+    Serial1.print(F("DEBUG: 左腿坐标 x="));
+    Serial1.print(lx);
+    Serial1.print(F(" y="));
+    Serial1.print(ly);
+    Serial1.print(F(" z="));
+    Serial1.println(lz);
     
     float turnYaw = 0, bodyRoll = 0;
     bool rightOK = ik.solveRightLeg(rx, ry, rz, turnYaw, bodyRoll, lastRightAngles);
     bool leftOK = ik.solveLeftLeg(lx, ly, lz, turnYaw, bodyRoll, lastLeftAngles);
+    
+    Serial1.print(F("DEBUG: rightOK="));
+    Serial1.print(rightOK);
+    Serial1.print(F(" leftOK="));
+    Serial1.println(leftOK);
     
     lastAnglesValid = rightOK && leftOK;
     return lastAnglesValid;
   }
   
   void sendAngles() {
+    Serial1.print(F("DEBUG: 右腿servo: HV3="));
+    Serial1.print(lastRightAngles.hipYaw);
+    Serial1.print(F(" HV5="));
+    Serial1.print(lastRightAngles.hipRoll);
+    Serial1.print(F(" HV7="));
+    Serial1.print(lastRightAngles.hipPitch);
+    Serial1.print(F(" HV9="));
+    Serial1.print(lastRightAngles.knee);
+    Serial1.print(F(" HV11="));
+    Serial1.print(lastRightAngles.anklePitch);
+    Serial1.print(F(" HV13="));
+    Serial1.println(lastRightAngles.ankleRoll);
+    
+    Serial1.print(F("DEBUG: 左腿servo: HV4="));
+    Serial1.print(lastLeftAngles.hipYaw);
+    Serial1.print(F(" HV6="));
+    Serial1.print(lastLeftAngles.hipRoll);
+    Serial1.print(F(" HV8="));
+    Serial1.print(lastLeftAngles.hipPitch);
+    Serial1.print(F(" HV10="));
+    Serial1.print(lastLeftAngles.knee);
+    Serial1.print(F(" HV12="));
+    Serial1.print(lastLeftAngles.anklePitch);
+    Serial1.print(F(" HV14="));
+    Serial1.println(lastLeftAngles.ankleRoll);
+    
     if (!lastAnglesValid) return;
     
+    // 設置速度
     static bool speedSet = false;
     if (!speedSet) {
-      icsHV.setSpd(3, walkSpeed); icsHV.setSpd(5, walkSpeed); icsHV.setSpd(7, walkSpeed);
-      icsHV.setSpd(9, walkSpeed); icsHV.setSpd(11, walkSpeed); icsHV.setSpd(13, walkSpeed);
-      icsHV.setSpd(4, walkSpeed); icsHV.setSpd(6, walkSpeed); icsHV.setSpd(8, walkSpeed);
-      icsHV.setSpd(10, walkSpeed); icsHV.setSpd(12, walkSpeed); icsHV.setSpd(14, walkSpeed);
+      icsHV.setSpd(3, walkSpeed);
+      icsHV.setSpd(5, walkSpeed);
+      icsHV.setSpd(7, walkSpeed);
+      icsHV.setSpd(9, walkSpeed);
+      icsHV.setSpd(11, walkSpeed);
+      icsHV.setSpd(13, walkSpeed);
+      icsHV.setSpd(4, walkSpeed);
+      icsHV.setSpd(6, walkSpeed);
+      icsHV.setSpd(8, walkSpeed);
+      icsHV.setSpd(10, walkSpeed);
+      icsHV.setSpd(12, walkSpeed);
+      icsHV.setSpd(14, walkSpeed);
       speedSet = true;
       delay(2);
     }
     
+    // 發送位置指令
     icsHV.setPos(3, lastRightAngles.hipYaw);
     icsHV.setPos(5, lastRightAngles.hipRoll);
     icsHV.setPos(7, lastRightAngles.hipPitch);
@@ -551,6 +625,10 @@ public:
     if (now - lastServoSend >= 30) {
       sendAngles();
       lastServoSend = now;
+      Serial1.print(F("DEBUG: phase="));
+      Serial1.print(phase);
+      Serial1.print(F(" steps="));
+      Serial1.println(stepsRemaining);
     }
   }
   
@@ -560,12 +638,25 @@ public:
     phase = 0;
     lastUpdate = millis();
     lastServoSend = millis();
-    static bool speedSet = false;
-    speedSet = false;
-    Serial1.print(F("開始行 ")); Serial1.print(steps); Serial1.println(F(" 步"));
+    
+    Serial1.print(F("開始行 "));
+    Serial1.print(steps);
+    Serial1.println(F(" 步"));
+    
+    // 執行步行循環
+    while (stepsRemaining > 0) {
+      updateWalk();
+      delay(20);  // 50Hz 更新頻率
+    }
+    
+    // 完成後回到 home 位置
+    moveAllServosToHome();
+    Serial1.println(F("✅ 步行完成"));
   }
   
-  bool isWalking() { return walking; }
+  bool isWalking() {
+    return walking;
+  }
   
   void safeStop() {
     Serial1.println(F("🛑 安全停止中..."));
@@ -574,8 +665,6 @@ public:
     Serial1.println(F("✅ 安全停止完成"));
   }
 };
-
-// ===== 建立全域步行 generator 物件 =====
 WalkGenerator walkGen;
 
 // ===== LED 控制 =====
@@ -1619,3 +1708,4 @@ void showHelp() {
   Serial1.println(F("? HV 1"));
   Serial1.println(F("==================="));
 }
+
