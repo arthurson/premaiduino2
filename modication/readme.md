@@ -1,3 +1,11 @@
+
+15-3-2026
+servi repairing
+
+one of ics3204 servo burnt due to wrong coding from deepseek 
+ics3204 teardowned and replaced a similar 1213 coreless motor
+it relifes again 
+
 28-2-2026
 add ch340e module.
 
