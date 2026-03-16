@@ -1,6 +1,6 @@
 /*
  * Pre-maiduino2_FINAL_IK.ino
- * 最終修正版 + IK 步行控制 + Hotkey + 安全STOP + GYRO平衡 (可開關)
+ * 最終修正版 + IK 步行控制 + 安全STOP + 電壓檢查 (只顯示，不關機)
  * 
  * 功能:
  * - 所有 ASCII 指令 (S MV, S HV, S MULTI, FREE, ?)
@@ -9,15 +9,13 @@
  * - 呼吸燈效果
  * - 0x18 多軸同步二進制指令 (有 XOR)
  * - 三個 SHAKE 版本
- * - IK 步行控制 (WALK 指令 + Hotkey)
+ * - IK 步行控制 (WALK 指令)
  * - 更安全版 STOP (先落腳再返 home)
- * - GYRO 平衡檢測 (可開關，預設關閉)
- * - 單腳測試功能 (TEST_LEGS)
+ * - 電壓檢查 (只顯示電壓，取消自動關機)
  * 
  * 修正:
  * - ASCII 指令用 binaryID 嚟搵伺服 (MV1=21, MV2=22, ...)
  * - 修正 getLeftFootTarget() 正負號 BUG (唔再一字馬)
- * - 交換 MV1 同 MV3 嘅 servoID (硬件交換)
  * - IK 轉換函數跟據實際伺服方向設定:
  *   HV7: 6500向前, 8500向後
  *   HV8: 8500向前, 6500向後
@@ -26,7 +24,6 @@
  *   HV11: 大數腳尖向下, 細數腳尖向上
  *   HV12: 細數腳尖向下, 大數腳尖向上
  * 
- * 更新日期：2026-03-08
  */
 
 #include <Arduino.h>
@@ -48,6 +45,14 @@ HardwareSerial Serial3(PB11, PB10);
 #define EN_HV_PIN   PA4
 #define EN_MV_PIN   PB2
 
+// ===== 電壓檢查相關定義 =====
+#define VOLTAGE_PIN          PA0  // ADC 腳位
+#define VOLTAGE_WARNING      9.0  // 低電壓警告閾值 (9V)
+#define VOLTAGE_SHUTDOWN     8.0  // 自動關機閾值 (8V) - 已禁用
+#define VOLTAGE_CHECK_INTERVAL 5000 // 檢查間隔 (5秒)
+#define VOLTAGE_SAMPLES      10   // 取樣次數
+#define VOLTAGE_DIVIDER_RATIO 2.0 // 分壓電阻比例 (需要根據實際電路調整)
+
 // ===== 建立兩個通訊物件 =====
 IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 50);
 IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 50);
@@ -55,17 +60,17 @@ IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 50);
 // ===== 速度定義 =====
 #define MIN_SPEED 1
 #define MAX_SPEED 127
-#define DEFAULT_SPEED 64
+#define DEFAULT_SPEED 63
 
 // ===== LED 相關定義 =====
 #define LED_RED_PIN   PA7
 #define LED_GREEN_PIN PB0
 #define LED_BLUE_PIN  PB1
 
-// ===== 呼吸燈速度定義 (你改咗做 4) =====
+// ===== 呼吸燈速度定義 =====
 #define BREATH_SPEED 4
 
-// ===== Batch Mode 設定 (你改咗) =====
+// ===== Batch Mode 設定 =====
 #define BATCH_BUFFER_SIZE 1024
 #define BATCH_TIMEOUT 300
 
@@ -82,11 +87,17 @@ struct MPU6050Data {
 
 MPU6050Data mpuData;
 
-// ===== Gyro 保護開關 (預設關閉) =====
-bool gyroProtectionEnabled = false;
+// ===== 電壓數據結構 =====
+struct VoltageData {
+  float currentVoltage;
+  float minVoltage;
+  float maxVoltage;
+  unsigned long lastCheckTime;
+  bool warningActive;
+  bool shutdownInitiated;
+} voltageData;
 
 // ===== 25軸伺服資訊 (使用 binaryID 系統, HV:1-14, MV:21-31) =====
-// 注意：已經交換 MV1 (binaryID 21) 同 MV3 (binaryID 23) 嘅 servoID
 struct ServoInfo {
   uint8_t binaryID;        // 二進制用嘅 ID (HV:1-14, MV:21-31)
   uint8_t servoID;         // 實際 ICS 伺服 ID (1-14 for HV, 1-11 for MV)
@@ -118,10 +129,9 @@ ServoInfo servoList[] = {
   {14, 14, 7450, 7450, DEFAULT_SPEED, &icsHV, "足首ロールL",  6200,  8450, true},
 
   // ===== MV群 (上半身) - binaryID 21-31 =====
-  // 注意：以下兩個 entry 已經交換咗 servoID
-  {21, 3,  7500, 7500, DEFAULT_SPEED, &icsMV, "頭萌",         7200,  8400, false},  // 原本 MV3 嘅 data，而家用 ID 3
+  {21, 1,  7500, 7500, DEFAULT_SPEED, &icsMV, "頭萌",         7200,  8400, false},
   {22, 2,  7500, 7500, DEFAULT_SPEED, &icsMV, "頭ヨー",       5000, 10000, false},
-  {23, 1,  7500, 7500, DEFAULT_SPEED, &icsMV, "頭ピッチ",     6900,  8100, false},  // 原本 MV1 嘅 data，而家用 ID 1
+  {23, 3,  7500, 7500, DEFAULT_SPEED, &icsMV, "頭ピッチ",     6900,  8100, false}, 
   {24, 4,  9800, 9800, DEFAULT_SPEED, &icsMV, "肩ロールR",    7450, 10350, false},
   {25, 5,  5200, 5200, DEFAULT_SPEED, &icsMV, "肩ロールL",    4550,  7550, false},
   {26, 6,  7500, 7500, DEFAULT_SPEED, &icsMV, "上腕ヨーR",    4000, 11000, false},
@@ -142,10 +152,6 @@ char batchBuffer[BATCH_BUFFER_SIZE];
 int batchIndex = 0;
 bool batchMode = false;
 unsigned long lastCharTime = 0;
-
-// ===== IK 步行控制類別前置宣告 =====
-class IKSolver;
-class WalkGenerator;
 
 // ===== 函式原型 =====
 void initLED();
@@ -172,8 +178,8 @@ ServoInfo* findServoByBinaryID(uint8_t binaryID);
 void actionShakeBox_ASCII();
 void actionShakeBox_CPP();
 void actionShakeBox_ICS();
-void testSingleLegs();
-// ===== IK Solver 類別 (重寫版 - 修正縮進和邏輯) =====
+
+// ===== IK Solver 類別 =====
 class IKSolver {
 private:
   const float thighLength = 65.0;    // 大腿長度 (mm)
@@ -198,7 +204,7 @@ private:
   // Servo 轉換常數 (3500-11500 = 8000單位對應270度)
   const float PULSE_PER_DEG = 8000.0 / 270.0;  // ≈ 29.63
   
-  // 角度限制 (根據硬件實際範圍)
+  // 角度限制
   const float MAX_HIP_PITCH = radians(85);    // 向前最大 85度
   const float MIN_HIP_PITCH = radians(-85);   // 向後最大 85度
   const float MAX_KNEE = radians(115);        // 膝蓋彎曲最大 115度
@@ -230,39 +236,32 @@ public:
   bool solveRightLeg(float targetX, float targetY, float targetZ,
                      float bodyYaw, float bodyRoll,
                      RightLegAngles &angles) {
-    // 設置髖部yaw和roll
     angles.hipYaw = hipYawToServoRight(bodyYaw);
     angles.hipRoll = hipRollToServoRight(bodyRoll);
     
-    // 計算腳踝位置
     float x = targetX;
     float y = targetY;
     float z = targetZ + BASE_Z;
     
-    // IK計算
     float distance = sqrt(x*x + z*z);
     if (distance > thighLength + shinLength + 1.0 || distance < abs(thighLength - shinLength) - 1.0) {
       return false;
     }
     
-    // 膝蓋角度
     float cosKnee = (thighLength*thighLength + shinLength*shinLength - distance*distance) 
                    / (2 * thighLength * shinLength);
-float kneeAngle = PI - acos(constrain(cosKnee, -1.0, 1.0));  // 轉換為相對角度
+    float kneeAngle = acos(constrain(cosKnee, -1.0, 1.0));
     kneeAngle = constrain(kneeAngle, MIN_KNEE, MAX_KNEE);
     
-    // 髖部pitch角度
-float alpha = atan2(x, -z);  // 修正坐標系統 (z是負數)
+    float alpha = atan2(x, z);
     float beta = acos((thighLength*thighLength + distance*distance - shinLength*shinLength) 
                      / (2 * thighLength * distance));
     float hipAngle = alpha - beta;
     hipAngle = constrain(hipAngle, MIN_HIP_PITCH, MAX_HIP_PITCH);
     
-    // 踝部pitch角度
     float ankleAngle = -(hipAngle + kneeAngle);
     ankleAngle = constrain(ankleAngle, MIN_ANKLE_RIGHT, MAX_ANKLE_RIGHT);
     
-    // 轉換為servo值
     angles.hipPitch = hipPitchToServoRight(hipAngle);
     angles.knee = kneeToServoRight(kneeAngle);
     angles.anklePitch = anklePitchToServoRight(ankleAngle);
@@ -274,39 +273,32 @@ float alpha = atan2(x, -z);  // 修正坐標系統 (z是負數)
   bool solveLeftLeg(float targetX, float targetY, float targetZ,
                     float bodyYaw, float bodyRoll,
                     LeftLegAngles &angles) {
-    // 設置髖部yaw和roll
     angles.hipYaw = hipYawToServoLeft(bodyYaw);
     angles.hipRoll = hipRollToServoLeft(bodyRoll);
     
-    // 計算腳踝位置
     float x = targetX;
     float y = targetY;
     float z = targetZ + BASE_Z;
     
-    // IK計算
     float distance = sqrt(x*x + z*z);
     if (distance > thighLength + shinLength + 1.0 || distance < abs(thighLength - shinLength) - 1.0) {
       return false;
     }
     
-    // 膝蓋角度
     float cosKnee = (thighLength*thighLength + shinLength*shinLength - distance*distance) 
                    / (2 * thighLength * shinLength);
-float kneeAngle = PI - acos(constrain(cosKnee, -1.0, 1.0));  // 轉換為相對角度
+    float kneeAngle = acos(constrain(cosKnee, -1.0, 1.0));
     kneeAngle = constrain(kneeAngle, MIN_KNEE, MAX_KNEE);
     
-    // 髖部pitch角度
-float alpha = atan2(x, -z);  // 修正坐標系統 (z是負數)
+    float alpha = atan2(x, z);
     float beta = acos((thighLength*thighLength + distance*distance - shinLength*shinLength) 
                      / (2 * thighLength * distance));
     float hipAngle = alpha - beta;
     hipAngle = constrain(hipAngle, MIN_HIP_PITCH, MAX_HIP_PITCH);
     
-    // 踝部pitch角度
     float ankleAngle = -(hipAngle + kneeAngle);
     ankleAngle = constrain(ankleAngle, MIN_ANKLE_LEFT, MAX_ANKLE_LEFT);
     
-    // 轉換為servo值
     angles.hipPitch = hipPitchToServoLeft(hipAngle);
     angles.knee = kneeToServoLeft(kneeAngle);
     angles.anklePitch = anklePitchToServoLeft(ankleAngle);
@@ -391,16 +383,16 @@ private:
   }
 };
 
-// ===== 步行軌跡生成器 (重寫版) =====
+// ===== 步行軌跡生成器 (保留所有除錯輸出) =====
 class WalkGenerator {
 private:
   IKSolver ik;
   
-  float stepLength = 40.0;      // 步長 - 增大到40mm
-  float stepHeight = 30.0;      // 抬腳高度 - 增大到30mm
-  float hipWidth = 40.0;        // 髖寬
-  float cycleTime = 2.0;        // 步態週期 (秒)
-  const float BASE_Z = 60.0;    // 腳踝到腳底距離
+  float stepLength = 40.0;
+  float stepHeight = 30.0;
+  float hipWidth = 40.0;
+  float cycleTime = 2.0;
+  const float BASE_Z = 60.0;
   
   float phase = 0.0;
   unsigned long lastUpdate = 0;
@@ -472,22 +464,21 @@ public:
     
     lastUpdate = now;
   }
-void getRightFootTarget(float &x, float &y, float &z, float &roll) {
+  
+  void getRightFootTarget(float &x, float &y, float &z, float &roll) {
     float t = phase;
     
     if (t < 1.0) {
-      // 支撐相: x從 +stepLength/2 到 -stepLength/2
       x = stepLength * (0.5 - t);
       y = hipWidth / 2;
-      z = -130.0 - BASE_Z;  // 腳底位置
+      z = -130.0 - BASE_Z;
     } else {
-      // 擺動相: x從 -stepLength/2 到 +stepLength/2
       float swingT = t - 1.0;
       x = stepLength * (swingT - 0.5);
       y = hipWidth / 2;
       z = -130.0 - BASE_Z + stepHeight * sin(swingT * PI);
     }
-roll = 0;
+    roll = 0;
     currentRX = x;
     currentRY = y;
     currentRZ = z;
@@ -497,13 +488,11 @@ roll = 0;
     float t = phase;
     
     if (t < 1.0) {
-      // 擺動相: x從 -stepLength/2 到 +stepLength/2
       float swingT = t;
       x = stepLength * (swingT - 0.5);
       y = -hipWidth / 2;
       z = -130.0 - BASE_Z + stepHeight * sin(swingT * PI);
     } else {
-      // 支撐相: x從 +stepLength/2 到 -stepLength/2
       float supportT = t - 1.0;
       x = stepLength * (0.5 - supportT);
       y = -hipWidth / 2;
@@ -515,10 +504,10 @@ roll = 0;
     currentLZ = z;
   }
   
-bool computeIK() {
+  bool computeIK() {
+    // 保留所有除錯輸出
     Serial1.println(F("DEBUG: computeIK called"));
     
-    // 调试：打印步态参数
     Serial1.print(F("DEBUG: stepLength="));
     Serial1.print(stepLength);
     Serial1.print(F(" stepHeight="));
@@ -528,6 +517,8 @@ bool computeIK() {
     float lx, ly, lz, lroll;
     getRightFootTarget(rx, ry, rz, rroll);
     getLeftFootTarget(lx, ly, lz, lroll);
+    
+    Serial1.print(F("DEBUG: 右腿坐标 x="));
     Serial1.print(rx);
     Serial1.print(F(" y="));
     Serial1.print(ry);
@@ -555,6 +546,7 @@ bool computeIK() {
   }
   
   void sendAngles() {
+    // 保留所有伺服角度輸出
     Serial1.print(F("DEBUG: 右腿servo: HV3="));
     Serial1.print(lastRightAngles.hipYaw);
     Serial1.print(F(" HV5="));
@@ -583,7 +575,6 @@ bool computeIK() {
     
     if (!lastAnglesValid) return;
     
-    // 設置速度
     static bool speedSet = false;
     if (!speedSet) {
       icsHV.setSpd(3, walkSpeed);
@@ -602,7 +593,6 @@ bool computeIK() {
       delay(2);
     }
     
-    // 發送位置指令
     icsHV.setPos(3, lastRightAngles.hipYaw);
     icsHV.setPos(5, lastRightAngles.hipRoll);
     icsHV.setPos(7, lastRightAngles.hipPitch);
@@ -625,6 +615,7 @@ bool computeIK() {
     if (now - lastServoSend >= 30) {
       sendAngles();
       lastServoSend = now;
+      // 保留 phase 和 steps 輸出
       Serial1.print(F("DEBUG: phase="));
       Serial1.print(phase);
       Serial1.print(F(" steps="));
@@ -643,13 +634,11 @@ bool computeIK() {
     Serial1.print(steps);
     Serial1.println(F(" 步"));
     
-    // 執行步行循環
     while (stepsRemaining > 0) {
       updateWalk();
-      delay(20);  // 50Hz 更新頻率
+      delay(20);
     }
     
-    // 完成後回到 home 位置
     moveAllServosToHome();
     Serial1.println(F("✅ 步行完成"));
   }
@@ -665,7 +654,75 @@ bool computeIK() {
     Serial1.println(F("✅ 安全停止完成"));
   }
 };
+
 WalkGenerator walkGen;
+
+// ===== 電壓檢查函式 (只保留顯示功能，取消關機) =====
+void initVoltageCheck() {
+  pinMode(VOLTAGE_PIN, INPUT_ANALOG);
+  voltageData.currentVoltage = 0.0;
+  voltageData.minVoltage = 99.0;
+  voltageData.maxVoltage = 0.0;
+  voltageData.lastCheckTime = 0;
+  voltageData.warningActive = false;
+  voltageData.shutdownInitiated = false;
+}
+
+float readBatteryVoltage() {
+  uint32_t sum = 0;
+  for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
+    sum += analogRead(VOLTAGE_PIN);
+    delay(1);
+  }
+  float average = (float)sum / VOLTAGE_SAMPLES;
+  
+  float voltageAtPin = (average / 4095.0) * 3.3;
+  float actualVoltage = voltageAtPin * VOLTAGE_DIVIDER_RATIO;
+  
+  return actualVoltage;
+}
+
+void checkVoltage() {
+  unsigned long now = millis();
+  
+  if (now - voltageData.lastCheckTime < VOLTAGE_CHECK_INTERVAL) {
+    return;
+  }
+  
+  voltageData.lastCheckTime = now;
+  voltageData.currentVoltage = readBatteryVoltage();
+  
+  if (voltageData.currentVoltage > voltageData.maxVoltage) {
+    voltageData.maxVoltage = voltageData.currentVoltage;
+  }
+  if (voltageData.currentVoltage < voltageData.minVoltage) {
+    voltageData.minVoltage = voltageData.currentVoltage;
+  }
+  
+  // 只顯示電壓，取消自動關機
+  Serial1.print(F("🔋 當前電壓: "));
+  Serial1.print(voltageData.currentVoltage);
+  Serial1.println(F("V"));
+  
+  // 檢查低電壓警告 (只警告，不關機)
+  if (voltageData.currentVoltage < VOLTAGE_WARNING) {
+    if (!voltageData.warningActive) {
+      Serial1.print(F("\n⚠️ 低電壓警告: "));
+      Serial1.print(voltageData.currentVoltage);
+      Serial1.println(F("V"));
+      voltageData.warningActive = true;
+    }
+    setLEDRed();
+  } else {
+    if (voltageData.warningActive) {
+      Serial1.println(F("✅ 電壓恢復正常"));
+      voltageData.warningActive = false;
+    }
+    if (!voltageData.warningActive) {
+      setLEDBlue();
+    }
+  }
+}
 
 // ===== LED 控制 =====
 void initLED() {
@@ -863,7 +920,7 @@ ServoInfo* findServoByBinaryID(uint8_t binaryID) {
   return NULL;
 }
 
-// ===== 處理 0x18 多軸同步二進制指令 (有 XOR) =====
+// ===== 處理 0x18 多軸同步二進制指令 =====
 void process0x18() {
   while (Serial1.available() >= 2) {
     uint8_t firstByte = Serial1.peek();
@@ -1266,11 +1323,9 @@ void actionShakeBox_CPP() {
   Serial1.println(F("✅ [C++] 完成"));
 }
 
-// ===== SHAKE_ICS 修正版：直接解析 frame，唔經 Serial1 =====
 void actionShakeBox_ICS() {
     Serial1.println(F("\n📦 [ICS] Shake a Box (直接解析)"));
 
-    // frame0: 初始化姿勢
     uint8_t frame0[] = {
         0x16, 0x18, 0x25, 
         0x02, 0x33, 0x0A,  // HV2 6538
@@ -1282,7 +1337,6 @@ void actionShakeBox_ICS() {
         0x4A               // XOR
     };
 
-    // frame1: HV2=5848, HV1=9052
     uint8_t frame1[] = {
         0x0A, 0x18, 0x2E,
         0x02, 0x2D, 0x58,
@@ -1290,7 +1344,6 @@ void actionShakeBox_ICS() {
         0x50
     };
 
-    // frame2: HV2=6538, HV1=8362
     uint8_t frame2[] = {
         0x0A, 0x18, 0x2E,
         0x02, 0x33, 0x0A,
@@ -1298,7 +1351,6 @@ void actionShakeBox_ICS() {
         0x6D
     };
 
-    // 解析 frame0 並執行
     uint8_t speed = frame0[2];
     int servoCount = (frame0[0] - 4) / 3;
     
@@ -1318,7 +1370,6 @@ void actionShakeBox_ICS() {
     
     delay(700);
 
-    // 來回 8 次
     for (int i = 0; i < 8; i++) {
         uint8_t* frame = (i % 2 == 0) ? frame1 : frame2;
         
@@ -1344,73 +1395,6 @@ void actionShakeBox_ICS() {
     Serial1.println(F("✅ [ICS] 完成"));
 }
 
-// ===== 單腳測試函數 =====
-void testSingleLegs() {
-  Serial1.println(F("\n🦿 測試單腳動作 (速度63)"));
-  Serial1.println(F("步驟1: 測試右腳..."));
-  
-  uint8_t testSpeed = 63;
-  
-  moveAllServosToHome();
-  delay(1000);
-  
-  Serial1.println(F("  右腳向前伸..."));
-  icsHV.setSpd(7, testSpeed); icsHV.setSpd(9, testSpeed); icsHV.setSpd(11, testSpeed);
-  delay(2);
-  icsHV.setPos(7, 6500);
-  icsHV.setPos(9, 6500);
-  icsHV.setPos(11, 8300);
-  delay(1000);
-  
-  Serial1.println(F("  右腳提高..."));
-  icsHV.setPos(9, 6000);
-  icsHV.setPos(11, 8500);
-  delay(1000);
-  
-  Serial1.println(F("  右腳放低..."));
-  icsHV.setPos(9, 7500);
-  icsHV.setPos(11, 7500);
-  delay(1000);
-  
-  Serial1.println(F("  右腳回中..."));
-  icsHV.setPos(7, 7500);
-  delay(1000);
-  
-  Serial1.println(F("✅ 右腳測試完成"));
-  Serial1.println(F("\n步驟2: 測試左腳..."));
-  delay(1000);
-  
-  moveAllServosToHome();
-  delay(1000);
-  
-  Serial1.println(F("  左腳向前伸..."));
-  icsHV.setSpd(8, testSpeed); icsHV.setSpd(10, testSpeed); icsHV.setSpd(12, testSpeed);
-  delay(2);
-  icsHV.setPos(8, 8500);
-  icsHV.setPos(10, 8500);
-  icsHV.setPos(12, 6800);
-  delay(1000);
-  
-  Serial1.println(F("  左腳提高..."));
-  icsHV.setPos(10, 9000);
-  icsHV.setPos(12, 6500);
-  delay(1000);
-  
-  Serial1.println(F("  左腳放低..."));
-  icsHV.setPos(10, 7500);
-  icsHV.setPos(12, 7550);
-  delay(1000);
-  
-  Serial1.println(F("  左腳回中..."));
-  icsHV.setPos(8, 7500);
-  delay(1000);
-  
-  Serial1.println(F("✅ 左腳測試完成"));
-  Serial1.println(F("\n🦿 所有單腳測試完成"));
-  
-  moveAllServosToHome();
-}
-
 // ===== setup() =====
 void setup() {
   initLED();
@@ -1424,8 +1408,10 @@ void setup() {
   Serial1.begin(115200);
   delay(100);
   
+  initVoltageCheck();
+  
   Serial1.println(F("\n========================================"));
-  Serial1.println(F("プリメイドAI - 最終修正版 + IK 步行控制 + Hotkey + 安全STOP + GYRO平衡 (可開關) + 單腳測試"));
+  Serial1.println(F("プリメイドAI - 最終修正版 + IK 步行控制 + 安全STOP + 電壓檢查 (只顯示，不關機)"));
   Serial1.println(F("========================================"));
   Serial1.println(F("支援:"));
   Serial1.println(F("  - ASCII 指令 (S MV, S HV, S MULTI, FREE, ?)"));
@@ -1433,15 +1419,10 @@ void setup() {
   Serial1.println(F("  - Batch Mode"));
   Serial1.println(F("  - 0x18 二進制 (有 XOR)"));
   Serial1.println(F("  - 三個 SHAKE 版本"));
-  Serial1.println(F("  - IK 步行控制 (WALK 指令 + Hotkey)"));
+  Serial1.println(F("  - IK 步行控制 (WALK 指令)"));
   Serial1.println(F("  - 更安全版 STOP (先落腳再返 home)"));
-  Serial1.println(F("  - GYRO 平衡檢測 (可開關，預設關閉)"));
-  Serial1.println(F("  - 單腳測試功能 (TEST_LEGS)"));
+  Serial1.println(F("  - 電壓檢查 (只顯示電壓，取消自動關機)"));
   Serial1.println(F("\n🔢 binaryID: HV=1-14, MV=21-31"));
-  Serial1.println(F("📝 ASCII 指令都用同一套 ID"));
-  Serial1.println(F("📝 已交換 MV1 同 MV3 嘅伺服 ID (硬件交換)"));
-  Serial1.println(F("📝 使用者修改：BREATH_SPEED=4, BATCH_BUFFER_SIZE=2048, BATCH_TIMEOUT=500"));
-  Serial1.println(F("📝 SHAKE_ICS 改為直接解析 frame"));
   
   Serial1.print(F("\n初始化伺服..."));
   initServos();
@@ -1453,6 +1434,11 @@ void setup() {
   Serial1.println(F("\n初始化 MPU6050..."));
   initMPU6050();
   calibrateGyro();
+  
+  voltageData.currentVoltage = readBatteryVoltage();
+  Serial1.print(F("\n🔋 當前電壓: "));
+  Serial1.print(voltageData.currentVoltage);
+  Serial1.println(F("V"));
   
   for (int i = 0; i < 2; i++) {
     breathLED(LED_GREEN_PIN, BREATH_SPEED);
@@ -1472,7 +1458,13 @@ void setup() {
 
 // ===== loop() =====
 void loop() {
-  // 不斷更新步行（如果正在行路）
+  checkVoltage();
+  
+  if (voltageData.shutdownInitiated) {
+    delay(100);
+    return;
+  }
+  
   walkGen.updateWalk();
   
   process0x18();
@@ -1505,21 +1497,12 @@ void loop() {
     batchMode = false;
   }
   
-  static unsigned long lastGyroCheck = 0;
-  if (gyroProtectionEnabled && (millis() - lastGyroCheck > 100)) {
-    if (readMPU6050()) {
-      if (abs(mpuData.gx) > 8 || abs(mpuData.gy) > 8) {
-        Serial1.println(F("⚠️ 傾斜過大，安全停止"));
-        walkGen.safeStop();
-      }
-    }
-    lastGyroCheck = millis();
-  }
-  
   static unsigned long lastBreath = 0;
   if (millis() - lastBreath > 10000) {
-    breathLED(LED_BLUE_PIN, BREATH_SPEED);
-    setLEDBlue();
+    if (!voltageData.warningActive) {
+      breathLED(LED_BLUE_PIN, BREATH_SPEED);
+      setLEDBlue();
+    }
     lastBreath = millis();
   }
   
@@ -1553,6 +1536,17 @@ void processCommand(String cmd) {
       Serial1.println(F("請先校準陀螺儀 (CALIBRATE)"));
     }
   }
+  else if (cmd == "VOLTAGE") {
+    float voltage = readBatteryVoltage();
+    Serial1.print(F("🔋 當前電壓: "));
+    Serial1.print(voltage);
+    Serial1.println(F("V"));
+    Serial1.print(F("📊 記錄範圍: "));
+    Serial1.print(voltageData.minVoltage);
+    Serial1.print(F("V - "));
+    Serial1.print(voltageData.maxVoltage);
+    Serial1.println(F("V"));
+  }
   else if (cmd == "CALIBRATE") {
     calibrateGyro();
   }
@@ -1571,60 +1565,7 @@ void processCommand(String cmd) {
   else if (cmd == "SHAKE_ICS") {
     actionShakeBox_ICS();
   }
-  else if (cmd == "GYRO_ON") {
-    gyroProtectionEnabled = true;
-    Serial1.println(F("🟢 Gyro 保護已開啟"));
-  }
-  else if (cmd == "GYRO_OFF") {
-    gyroProtectionEnabled = false;
-    Serial1.println(F("🔴 Gyro 保護已關閉"));
-  }
-  else if (cmd == "TEST_LEGS") {
-    testSingleLegs();
-  }
-  else if (cmd == "W" || cmd == "WALK_F") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(20, 0, 0);
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 向前"));
-  }
-  else if (cmd == "X" || cmd == "WALK_B") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(-20, 0, 0);
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 向後"));
-  }
-  else if (cmd == "A" || cmd == "WALK_L") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(0, 20, 0);
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 向左"));
-  }
-  else if (cmd == "D" || cmd == "WALK_R") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(0, -20, 0);
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 向右"));
-  }
-  else if (cmd == "Q" || cmd == "TURN_L") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(0, 0, radians(10));
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 轉左"));
-  }
-  else if (cmd == "E" || cmd == "TURN_R") {
-    walkGen.setWalkParams(20, 10, 2.0);
-    walkGen.setSpeed(40);
-    walkGen.setVelocity(0, 0, radians(-10));
-    walkGen.walkSteps(5);
-    Serial1.println(F("🚶 轉右"));
-  }
-  else if (cmd == "S" || cmd == "STOP") {
+  else if (cmd == "STOP") {
     walkGen.safeStop();
   }
   else if (cmd.startsWith("WALK ")) {
@@ -1673,27 +1614,16 @@ void showHelp() {
   Serial1.println(F("\n=== 命令列表 ==="));
   Serial1.println(F("H, HELP, ? : 顯示說明"));
   Serial1.println(F("G          : 顯示陀螺儀數據"));
+  Serial1.println(F("VOLTAGE    : 顯示當前電壓"));
   Serial1.println(F("CALIBRATE  : 校準陀螺儀"));
   Serial1.println(F("HOME       : 全部回家"));
   Serial1.println(F("FREE ALL   : 全部脫力"));
-  Serial1.println(F("\n=== Gyro 保護 ==="));
-  Serial1.println(F("GYRO_ON    : 開啟傾斜保護"));
-  Serial1.println(F("GYRO_OFF   : 關閉傾斜保護 (預設)"));
-  Serial1.println(F("\n=== 單腳測試 ==="));
-  Serial1.println(F("TEST_LEGS  : 測試右腳 → 左腳 (速度63)"));
-  Serial1.println(F("\n=== 即時控制 (Hotkey) ==="));
-  Serial1.println(F("W          : 向前"));
-  Serial1.println(F("X          : 向後"));
-  Serial1.println(F("A          : 向左"));
-  Serial1.println(F("D          : 向右"));
-  Serial1.println(F("Q          : 轉左"));
-  Serial1.println(F("E          : 轉右"));
-  Serial1.println(F("S          : 安全停止"));
   Serial1.println(F("\n=== 步行指令 (行幾步) ==="));
   Serial1.println(F("WALK F 10  : 向前行10步"));
   Serial1.println(F("WALK B 5   : 向後行5步"));
   Serial1.println(F("WALK L 3   : 向左行3步"));
   Serial1.println(F("WALK R 3   : 向右行3步"));
+  Serial1.println(F("STOP       : 安全停止"));
   Serial1.println(F("\n=== 三個 SHAKE 版本 ==="));
   Serial1.println(F("SHAKE_ASCII - ASCII 版"));
   Serial1.println(F("SHAKE_CPP   - C++ 版"));
@@ -1708,4 +1638,3 @@ void showHelp() {
   Serial1.println(F("? HV 1"));
   Serial1.println(F("==================="));
 }
-
