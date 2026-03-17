@@ -1,10 +1,12 @@
 
 15-3-2026
-servi repairing
+servo repairing
 
-one of ics3204 servo burnt due to wrong coding from deepseek 
-ics3204 teardowned and replaced a similar 1213 coreless motor
-it relifes again 
+![IMG_20260315_152857](https://github.com/user-attachments/assets/1db9b87b-2c72-476a-9594-c1ea874b2ef6)
+
+one of ics3204 servo burnt due to wrong coding from deepseek.
+i bought a similar 1213 coreless motor to replace the burnt motor.
+it works again 
 
 28-2-2026
 add ch340e module.
