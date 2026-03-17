@@ -207,9 +207,9 @@ void actionShakeBox_ICS();
 #define KNEE_MIN        0
 
 // 步行參數
-#define STEP_LENGTH     20.0  // 步長 (mm)
-#define STEP_HEIGHT     15.0  // 抬腳高度 (mm)
-#define CYCLE_TIME      1.5   // 步態週期 (秒)
+#define STEP_LENGTH     30.0  // 步長 (mm)
+#define STEP_HEIGHT     25.0  // 抬腳高度 (mm)
+#define CYCLE_TIME      3.0   // 步態週期 (秒)
 
 // ===== 2D IK 解算器 =====
 class IKSolver2D {
@@ -277,9 +277,9 @@ private:
   float leftHipAngle, leftKneeAngle;
   
   // 伺服值
-// 伺服值
   uint16_t rightHipPulse, rightKneePulse, rightAnklePulse;
   uint16_t leftHipPulse, leftKneePulse, leftAnklePulse;
+  
 public:
   WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH) {
     stepLength = STEP_LENGTH;
@@ -296,14 +296,6 @@ public:
     stepLength = length;
     stepHeight = height;
     cycleTime = time;
-  }
-  
-  void setSpeed(uint8_t speed) {
-    // 速度由外部指令設定，呢度唔做嘢
-  }
-  
-  void setVelocity(float vx, float vy, float turn) {
-    // 暫時唔用
   }
   
   void stop() {
@@ -347,71 +339,66 @@ public:
     // 更新相位 (0-2.0)
     phase += (2.0 / cycleTime) * deltaTime;
     
-    // 處理相位循環
+    // 处理相位循环
     while (phase >= 2.0) {
       phase -= 2.0;
       if (stepsRemaining > 0) {
         stepsRemaining--;
+        if (stepsRemaining == 0) {
+          // 完成所有步数，立即停止
+          walking = false;
+          phase = 0;
+          moveAllServosToHome();
+          Serial1.println(F("✅ 步行完成"));
+          return;
+        }
       }
-    }
-    
-    // 檢查是否完成
-    if (stepsRemaining <= 0 && phase == 0) {
-      walking = false;
-      moveAllServosToHome();
-      Serial1.println(F("✅ 步行完成"));
     }
   }
   
-void computeRightTarget() {
+  void computeRightTarget() {
     float t = phase;
     
     if (t < 1.0) {
       // 支撐相：腳在地面，身體向前移動，腳相對身體向後
-      // x從正（前）到負（後）
       rightTargetX = stepLength * (0.5 - t);
-      // 計算z使得距離不超過腿長（圓弧軌跡）
       float maxZ = sqrt(130.0 * 130.0 - rightTargetX * rightTargetX);
       rightTargetZ = -maxZ - ANKLE_HEIGHT;
     } else {
       // 擺動相：腳抬起，從後向前擺動
       float swingT = t - 1.0;
-      rightTargetX = stepLength * (swingT - 0.5);
-      // 抬腳軌跡：在圓弧基礎上抬起
+      float smoothT = sin(swingT * PI / 2.0);
+      smoothT = smoothT * smoothT;
+      rightTargetX = stepLength * (smoothT - 0.5);
+      float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
       float maxZ = sqrt(130.0 * 130.0 - rightTargetX * rightTargetX);
-      float lift = stepHeight * sin(swingT * PI);
       rightTargetZ = -(maxZ + ANKLE_HEIGHT - lift);
     }
   }
-  
-  void computeLeftTarget() {
-    // 左腳相位比右腳超前 1.0（右腿支撐時左腿擺動，右腿擺動時左腿支撐）
+void computeLeftTarget() {
     float t = phase + 1.0;
     if (t >= 2.0) t -= 2.0;
     
     if (t < 1.0) {
-      // 支撐相：腳在地面，身體向前移動，腳相對身體向後
       leftTargetX = stepLength * (0.5 - t);
-      // 計算z使得距離不超過腿長（圓弧軌跡）
       float maxZ = sqrt(130.0 * 130.0 - leftTargetX * leftTargetX);
       leftTargetZ = -maxZ - ANKLE_HEIGHT;
     } else {
-      // 擺動相：腳抬起，從後向前擺動
       float swingT = t - 1.0;
-      leftTargetX = stepLength * (swingT - 0.5);
-      // 抬腳軌跡：在圓弧基礎上抬起
+      float smoothT = sin(swingT * PI / 2.0);
+      smoothT = smoothT * smoothT;
+      leftTargetX = stepLength * (smoothT - 0.5);
+      float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
       float maxZ = sqrt(130.0 * 130.0 - leftTargetX * leftTargetX);
-      float lift = stepHeight * sin(swingT * PI);
       leftTargetZ = -(maxZ + ANKLE_HEIGHT - lift);
     }
   }
   
   bool computeIK() {
-    // rightTargetZ 和 leftTargetZ 已經是髖到腳踝的距離（在computeRightTarget中計算）
     float rightZ = rightTargetZ + ANKLE_HEIGHT;
     float leftZ = leftTargetZ + ANKLE_HEIGHT;
     
-    // 除錯輸出
+    // 除錯輸出 - 目標位置
     Serial1.print(F("DEBUG: 右腿目標 x="));
     Serial1.print(rightTargetX);
     Serial1.print(F(" z="));
@@ -435,53 +422,50 @@ void computeRightTarget() {
                                   leftHipAngle, leftKneeAngle);
 
     if (rightOK && leftOK) {
-// 角度限制
+      // 角度限制
       rightHipAngle = constrain(rightHipAngle, HIP_PITCH_MIN, HIP_PITCH_MAX);
       leftHipAngle = constrain(leftHipAngle, HIP_PITCH_MIN, HIP_PITCH_MAX);
       
-      // 膝蓋角度轉換：IK返回兩腿夾角（180度=伸直），轉換為彎曲角度（0度=伸直）
+      // 膝蓋角度轉換
       float rightServoKnee = 180.0 - rightKneeAngle;
       float leftServoKnee = 180.0 - leftKneeAngle;
       rightServoKnee = constrain(rightServoKnee, KNEE_MIN, KNEE_MAX);
       leftServoKnee = constrain(leftServoKnee, KNEE_MIN, KNEE_MAX);
+      
+      // 除錯輸出 - 角度
       Serial1.print(F("DEBUG: 右腿角度 hip="));
       Serial1.print(rightHipAngle);
       Serial1.print(F(" knee="));
-Serial1.print(F(" knee="));
       Serial1.print(rightServoKnee);
+      Serial1.print(F(" 左腿角度 hip="));
       Serial1.print(leftHipAngle);
       Serial1.print(F(" knee="));
-Serial1.print(F(" knee="));
       Serial1.println(leftServoKnee);
+      
       // 轉換為伺服脈衝
-      // HV7: 正角度=向前（6500），負角度=向後（8500）
       int16_t rightHipDiff = -round(rightHipAngle * PULSE_PER_DEG);
       rightHipPulse = constrain(HOME_HV7 + rightHipDiff, 4700, 10200);
-// HV9: 彎曲角度（0度=伸直，115度=最大彎曲）
+      
       int16_t rightKneeDiff = round(rightServoKnee * PULSE_PER_DEG);
       rightKneePulse = constrain(HOME_HV9 - rightKneeDiff, 3950, 7600);
       
-      // HV8: 正角度=向前（8500），負角度=向後（6500）
       int16_t leftHipDiff = round(leftHipAngle * PULSE_PER_DEG);
       leftHipPulse = constrain(HOME_HV8 + leftHipDiff, 4700, 10200);
-// HV10: 彎曲角度（0度=伸直，115度=最大彎曲）
-      int16_t leftKneeDiff = round(leftServoKnee * PULSE_PER_DEG);
+      
+int16_t leftKneeDiff = round(leftServoKnee * PULSE_PER_DEG);
       leftKneePulse = constrain(HOME_HV10 + leftKneeDiff, 7400, 11050);
       
-      // 腳掌角度補償：保持腳掌平行地面
-      // 腳掌角度 = 膝蓋彎曲角度 - 髖部角度
+      // 腳掌角度補償
       float rightAnkleAngle = rightServoKnee - rightHipAngle;
       float leftAnkleAngle = leftServoKnee - leftHipAngle;
       
-      // HV11: 右踝pitch
       int16_t rightAnkleDiff = -round(rightAnkleAngle * PULSE_PER_DEG);
       rightAnklePulse = constrain(HOME_HV11 + rightAnkleDiff, 4700, 10200);
       
-      // HV12: 左踝pitch
       int16_t leftAnkleDiff = round(leftAnkleAngle * PULSE_PER_DEG);
       leftAnklePulse = constrain(HOME_HV12 + leftAnkleDiff, 4700, 10200);
       
-      // 除錯輸出
+      // 除錯輸出 - 伺服脈衝
       Serial1.print(F("DEBUG: 右腿伺服 HV7="));
       Serial1.print(rightHipPulse);
       Serial1.print(F(" HV9="));
@@ -494,16 +478,17 @@ Serial1.print(F(" knee="));
     
     return rightOK && leftOK;
   }
-void sendAngles() {
-    // 設定速度（用預設速度）
+  
+  void sendAngles() {
+    // 設定速度（較慢速度讓動作更平滑）
     static bool speedSet = false;
     if (!speedSet) {
-      icsHV.setSpd(7, DEFAULT_SPEED);
-      icsHV.setSpd(9, DEFAULT_SPEED);
-      icsHV.setSpd(8, DEFAULT_SPEED);
-      icsHV.setSpd(10, DEFAULT_SPEED);
-      icsHV.setSpd(11, DEFAULT_SPEED);
-      icsHV.setSpd(12, DEFAULT_SPEED);
+      icsHV.setSpd(7, 40);
+      icsHV.setSpd(9, 40);
+      icsHV.setSpd(8, 40);
+      icsHV.setSpd(10, 40);
+      icsHV.setSpd(11, 40);
+      icsHV.setSpd(12, 40);
       speedSet = true;
       delay(2);
     }
@@ -516,19 +501,21 @@ void sendAngles() {
     icsHV.setPos(10, leftKneePulse);
     icsHV.setPos(12, leftAnklePulse);
     
+    // 除錯輸出 - 狀態
     Serial1.print(F("DEBUG: phase="));
     Serial1.print(phase);
     Serial1.print(F(" steps="));
     Serial1.println(stepsRemaining);
-}
+  }
   
   void updateWalk() {
     if (!walking) return;
     updatePhase();
+    computeRightTarget();
+    computeLeftTarget();
     computeIK();
-    
-    unsigned long now = millis();
-    if (now - lastServoSend >= 20) {  // 50Hz 更新（更流暢）
+unsigned long now = millis();
+    if (now - lastServoSend >= 30) {
       sendAngles();
       lastServoSend = now;
     }
@@ -580,7 +567,10 @@ void checkVoltage() {
   }
   
   Serial1.print(F("🔋 當前電壓: "));
-if (voltageData.currentVoltage < VOLTAGE_WARNING) {
+  Serial1.print(voltageData.currentVoltage);
+  Serial1.println(F("V"));
+  
+  if (voltageData.currentVoltage < VOLTAGE_WARNING) {
     if (!voltageData.warningActive) {
       Serial1.print(F("\n⚠️ 低電壓警告: "));
       Serial1.print(voltageData.currentVoltage);
@@ -604,7 +594,7 @@ if (voltageData.currentVoltage < VOLTAGE_WARNING) {
       setLEDOff();
       
       // 進入無限循環（安全模式）
-      while(1) {
+while(1) {
         delay(1000);
       }
     }
@@ -616,7 +606,7 @@ if (voltageData.currentVoltage < VOLTAGE_WARNING) {
     if (!voltageData.warningActive) {
       setLEDBlue();
     }
-}
+  }
 }
 
 // ===== LED 控制 =====
@@ -626,7 +616,6 @@ void initLED() {
   pinMode(LED_BLUE_PIN, OUTPUT);
   setLEDOff();
 }
-
 void setLEDRed() {
   digitalWrite(LED_RED_PIN, HIGH);
   digitalWrite(LED_GREEN_PIN, LOW);
