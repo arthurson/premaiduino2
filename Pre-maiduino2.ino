@@ -208,7 +208,7 @@ void actionShakeBox_ICS();
 
 // 步行參數
 #define STEP_LENGTH     30.0  // 步長 (mm)
-#define STEP_HEIGHT     25.0  // 抬腳高度 (mm)
+#define STEP_HEIGHT     30.0  // 抬腳高度 (mm)
 #define CYCLE_TIME      3.0   // 步態週期 (秒)
 
 // ===== 2D IK 解算器 =====
@@ -242,7 +242,7 @@ public:
     // 計算髖部角度
     float alpha = atan2(x, -z);  // z是負值（向下）
     float beta = acos((L1*L1 + distance*distance - L2*L2) / (2 * L1 * distance));
-    hipAngle = alpha - beta;
+    hipAngle = alpha + beta;  // 改為加號，讓向前擺動角度更大
     // 轉換為度
     hipAngle = hipAngle * 180.0 / PI;
     kneeAngle = kneeAngle * 180.0 / PI;
@@ -367,15 +367,16 @@ public:
     } else {
       // 擺動相：腳抬起，從後向前擺動
       float swingT = t - 1.0;
-      float smoothT = sin(swingT * PI / 2.0);
-      smoothT = smoothT * smoothT;
-      rightTargetX = stepLength * (smoothT - 0.5);
+      // 水平位移：線性插值從-15mm到+15mm
+      rightTargetX = stepLength * (swingT - 0.5);
+      // 垂直抬腳：正弦平滑
       float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
       float maxZ = sqrt(130.0 * 130.0 - rightTargetX * rightTargetX);
       rightTargetZ = -(maxZ + ANKLE_HEIGHT - lift);
     }
   }
-void computeLeftTarget() {
+  
+  void computeLeftTarget() {
     float t = phase + 1.0;
     if (t >= 2.0) t -= 2.0;
     
@@ -385,9 +386,9 @@ void computeLeftTarget() {
       leftTargetZ = -maxZ - ANKLE_HEIGHT;
     } else {
       float swingT = t - 1.0;
-      float smoothT = sin(swingT * PI / 2.0);
-      smoothT = smoothT * smoothT;
-      leftTargetX = stepLength * (smoothT - 0.5);
+      // 水平位移：線性插值從-15mm到+15mm
+      leftTargetX = stepLength * (swingT - 0.5);
+      // 垂直抬腳：正弦平滑
       float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
       float maxZ = sqrt(130.0 * 130.0 - leftTargetX * leftTargetX);
       leftTargetZ = -(maxZ + ANKLE_HEIGHT - lift);
@@ -443,7 +444,7 @@ void computeLeftTarget() {
       Serial1.println(leftServoKnee);
       
       // 轉換為伺服脈衝
-      int16_t rightHipDiff = -round(rightHipAngle * PULSE_PER_DEG);
+      int16_t rightHipDiff = -round(rightHipAngle * PULSE_PER_DEG);  // HV7與HV8反向
       rightHipPulse = constrain(HOME_HV7 + rightHipDiff, 4700, 10200);
       
       int16_t rightKneeDiff = round(rightServoKnee * PULSE_PER_DEG);
