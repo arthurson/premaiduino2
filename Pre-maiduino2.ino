@@ -470,10 +470,14 @@ int16_t leftKneeDiff = round(leftServoKnee * PULSE_PER_DEG);
       Serial1.print(rightHipPulse);
       Serial1.print(F(" HV9="));
       Serial1.print(rightKneePulse);
-      Serial1.print(F(" 左腿伺服 HV8="));
+      Serial1.print(F(" HV11="));
+      Serial1.print(rightAnklePulse);
+      Serial1.print(F(" | 左腿伺服 HV8="));
       Serial1.print(leftHipPulse);
       Serial1.print(F(" HV10="));
-      Serial1.println(leftKneePulse);
+      Serial1.print(leftKneePulse);
+      Serial1.print(F(" HV12="));
+      Serial1.println(leftAnklePulse);
     }
     
     return rightOK && leftOK;
