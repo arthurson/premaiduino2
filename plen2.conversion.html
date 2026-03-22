@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PLEN2 → Premaiduino 動作轉換器 (重構版)</title>
+    <title>PLEN2 → Premaiduino 動作轉換器 (官方ICS Binary)</title>
     <style>
-        /* 完全保留原有樣式，僅移除上方log相關、調整佈局 */
+        /* 完全保留原有樣式 */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -97,11 +97,6 @@
             border: 1px solid #f5c6cb;
         }
         
-        /* 原有上方 log container 已移除，但保留樣式以防萬一 */
-        .serial-log-container {
-            display: none; /* 隱藏原本的串口日誌區塊 */
-        }
-        
         .main-content {
             display: flex;
             flex-wrap: wrap;
@@ -178,7 +173,6 @@
             margin-bottom: 30px;
         }
         
-        /* 伺服設定將移到右邊，故左邊移除該區塊，但保留樣式 */
         .servo-settings {
             background: #f8f9fa;
             border-radius: 15px;
@@ -694,7 +688,6 @@
             border-top: 1px solid #dee2e6;
         }
 
-        /* ===== 獨立大型日誌區塊 (位於自訂指令下方) ===== */
         .extended-log-area {
             background: #1e1e3f;
             border-radius: 12px;
@@ -765,7 +758,7 @@
     <div class="container">
         <div class="header">
             <h1>🤖 PLEN2 → Premaiduino 動作轉換器</h1>
-            <p>新ID系統｜獨立Home Point｜獨立反轉｜可調比例｜雙模式輸出｜重構版</p>
+            <p>官方ICS Binary協議｜新ID系統｜獨立Home Point｜可調比例｜雙模式輸出</p>
         </div>
         
         <div class="serial-top">
@@ -783,10 +776,6 @@
             </div>
             <div id="serialStatus" class="serial-status serial-disconnected">
                 🔴 未連接
-            </div>
-            <!-- 上方 log container 已隱藏 (display:none) 但結構保留 -->
-            <div class="serial-log-container">
-                <div class="serial-log" id="serialLog" style="display:none;"></div>
             </div>
         </div>
         
@@ -888,7 +877,6 @@
                         <button class="preset-btn" id="speed15Btn">1.5x</button>
                     </div>
                 </div>
-                <!-- 左側原本的伺服設定區塊已移除，移到右側 -->
             </div>
             
             <div class="right-panel">
@@ -972,11 +960,11 @@
                 
                 <!-- 自訂指令區 -->
                 <div style="display: flex; gap: 10px;">
-                    <input type="text" id="customCommand" class="serial-input" placeholder="輸入自訂指令" style="flex:1; padding:10px; border:1px solid #ced4da; border-radius:4px;">
+                    <input type="text" id="customCommand" class="serial-input" placeholder="輸入自訂指令 (ASCII 或 HEX 用空格分隔)" style="flex:1; padding:10px; border:1px solid #ced4da; border-radius:4px;">
                     <button class="btn btn-primary" id="sendCustomBtn">📤 發送</button>
                 </div>
 
-                <!-- 新增大日誌區塊 (save改為copy) -->
+                <!-- 日誌區塊 -->
                 <div class="extended-log-area" id="extendedLogArea">
                     <div class="log-header">
                         <span>📋 完整通訊日誌 (可清除/複製)</span>
@@ -990,7 +978,7 @@
                     </div>
                 </div>
 
-                <!-- 伺服設定移到日誌下方 -->
+                <!-- 伺服設定 -->
                 <div class="servo-settings">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                         <h3 style="color: #495057;">🛠️ 伺服設定</h3>
@@ -1020,7 +1008,7 @@
         </div>
         
         <footer>
-            <p>✅ 新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出｜重構版 (Frame0全出，之後只出有改變)</p>
+            <p>✅ 官方ICS Binary協議｜新ID系統: HV=1-14, MV=21-31｜可調比例｜雙模式輸出</p>
         </footer>
     </div>
     
@@ -1093,11 +1081,11 @@
         let writer = null;
         let isPlaying = false;
         let currentRatio = 2.96;
-        let currentSpeedMultiplier = 0.30;
+        let currentSpeedMultiplier = 0.40;
         let currentMode = 'ASCII';
         let servoMoveCount = {};
         let changesMade = false;
-        let logEntries = [];        // 儲存完整日誌（包含時間戳）
+        let logEntries = [];
         
         // DOM 元素
         const uploadArea = document.getElementById('uploadArea');
@@ -1147,18 +1135,75 @@
         const serialStatus = document.getElementById('serialStatus');
         const customCommand = document.getElementById('customCommand');
         const sendCustomBtn = document.getElementById('sendCustomBtn');
-        const serialLog = document.getElementById('serialLog'); // 保留但不使用
         const baudRate = document.getElementById('baudRate');
         
-        // 新增大日誌元素
         const extendedLogContent = document.getElementById('extendedLogContent');
         const clearLogBtn = document.getElementById('clearLogBtn');
         const copyLogBtn = document.getElementById('copyLogBtn');
         
+        // ===== 官方 ICS Binary 函數 =====
+        function generateICSCommand(servoData, speed) {
+            // 官方 ICS Binary 格式: 每個伺服需要先發速度指令，再發位置指令
+            // 但為了 batch 輸出，這裡生成的是位置指令的 HEX 格式
+            // 實際發送時會分開發送速度指令和位置指令
+            let commands = [];
+            for (let s of servoData) {
+                const binaryId = SERVO_CONFIG[s.servoId].binaryId;
+                const high = (s.angle >> 7) & 0x7F;
+                const low = s.angle & 0x7F;
+                // 位置指令: 0x80 + ID
+                const posCmd = (0x80 | binaryId).toString(16).padStart(2, '0').toUpperCase();
+                const highHex = high.toString(16).padStart(2, '0').toUpperCase();
+                const lowHex = low.toString(16).padStart(2, '0').toUpperCase();
+                commands.push(`${posCmd} ${highHex} ${lowHex}`);
+            }
+            // 速度指令單獨處理，這裡只返回位置指令
+            return commands;
+        }
+        
+        function generateICSSpeedCommand(id, speed) {
+            // 官方速度指令: 0xC0 + ID, 0x02, speed
+            const binaryId = SERVO_CONFIG[id].binaryId;
+            const spdCmd = (0xC0 | binaryId).toString(16).padStart(2, '0').toUpperCase();
+            const spdHex = speed.toString(16).padStart(2, '0').toUpperCase();
+            return `${spdCmd} 02 ${spdHex}`;
+        }
+        
+        function generateFullICSBatch(servoData, speed) {
+            // 生成完整的官方 ICS Batch (先速度後位置)
+            let speedCmds = [];
+            let posCmds = [];
+            for (let s of servoData) {
+                const binaryId = SERVO_CONFIG[s.servoId].binaryId;
+                // 速度指令
+                const spdCmd = (0xC0 | binaryId).toString(16).padStart(2, '0').toUpperCase();
+                speedCmds.push(`${spdCmd} 02 ${speed.toString(16).padStart(2, '0').toUpperCase()}`);
+                // 位置指令
+                const high = (s.angle >> 7) & 0x7F;
+                const low = s.angle & 0x7F;
+                const posCmd = (0x80 | binaryId).toString(16).padStart(2, '0').toUpperCase();
+                posCmds.push(`${posCmd} ${high.toString(16).padStart(2, '0').toUpperCase()} ${low.toString(16).padStart(2, '0').toUpperCase()}`);
+            }
+            return { speedCmds, posCmds };
+        }
+        
+        function convertAngle(plenValue, servoId) {
+            const config = SERVO_CONFIG[servoId];
+            if (!config) return 7500 + Math.round(plenValue * currentRatio);
+            
+            let finalPlen = config.reverse ? -plenValue : plenValue;
+            let value = Math.round(config.home + (finalPlen * currentRatio));
+            
+            if (value > config.max) value = config.max;
+            else if (value < config.min) value = config.min;
+            
+            return value;
+        }
+        
         function init() {
             renderServoTable();
             setupEventListeners();
-            addLog('✅ PLEN2 轉換器已啟動 (重構版)');
+            addLog('✅ PLEN2 轉換器已啟動 (官方ICS Binary協議)');
             addLog('📊 新ID系統: HV=1-14, MV=21-31');
             addLog('📐 比例可調 (預設 2.96)｜雙模式輸出');
             addLog('⚡ 速度範圍: 10-127 (10最慢, 127最快)');
@@ -1280,7 +1325,7 @@
                         text += frame.asciiCommand + '\n';
                     }
                     if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                        text += frame.icsCommand;
+                        text += frame.icsCommandDisplay;
                     }
                     copyToClipboard(text);
                 }
@@ -1296,7 +1341,6 @@
                 });
             });
             
-            // 串口事件
             connectBtn.addEventListener('click', connectSerial);
             disconnectBtn.addEventListener('click', disconnectSerial);
             sendCustomBtn.addEventListener('click', sendCustomCommand);
@@ -1304,7 +1348,6 @@
                 if (e.key === 'Enter') sendCustomCommand();
             });
 
-            // 新增大日誌按鈕 (清除 / 複製)
             clearLogBtn.addEventListener('click', clearExtendedLog);
             copyLogBtn.addEventListener('click', copyExtendedLog);
         }
@@ -1373,36 +1416,6 @@
             return names[`${group}${id}`] || '-';
         }
         
-        function convertAngle(plenValue, servoId) {
-            const config = SERVO_CONFIG[servoId];
-            if (!config) return 7500 + Math.round(plenValue * currentRatio);
-            
-            let finalPlen = config.reverse ? -plenValue : plenValue;
-            let value = Math.round(config.home + (finalPlen * currentRatio));
-            
-            if (value > config.max) value = config.max;
-            else if (value < config.min) value = config.min;
-            
-            return value;
-        }
-        
-        function calculateXOR(bytes) {
-            return bytes.reduce((a, b) => a ^ b, 0);
-        }
-        
-        function generateICSCommand(servoData, speed) {
-            const packet = [4 + servoData.length * 3, 0x18, speed];
-            for (let s of servoData) {
-                const binaryId = SERVO_CONFIG[s.servoId].binaryId;
-                packet.push(binaryId);
-                packet.push((s.angle >> 7) & 0x7F);
-                packet.push(s.angle & 0x7F);
-            }
-            const xor = calculateXOR(packet);
-            packet.push(xor);
-            return packet.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-        }
-        
         function handleFile(file) {
             if (!file.name.toLowerCase().endsWith('.json')) {
                 alert('請上傳 JSON 格式的檔案！');
@@ -1460,9 +1473,9 @@
             changesMade = false;
             changedIndicator.style.display = 'none';
             
-            speedSlider.value = 0.3;
-            speedDisplay.textContent = '0.30x';
-            currentSpeedMultiplier = 0.3;
+            speedSlider.value = 0.4;
+            speedDisplay.textContent = '0.40x';
+            currentSpeedMultiplier = 0.4;
             fileInput.value = '';
         }
         
@@ -1471,6 +1484,30 @@
             for (let i = 1; i <= 14; i++) cmd += ` HV${i} ${SERVO_CONFIG[`HV${i}`].home}`;
             for (let i = 1; i <= 11; i++) cmd += ` MV${i} ${SERVO_CONFIG[`MV${i}`].home}`;
             return cmd;
+        }
+        
+        function generateICSHomeBatch() {
+            let speedCmds = [];
+            let posCmds = [];
+            for (let i = 1; i <= 14; i++) {
+                const id = `HV${i}`;
+                const binaryId = SERVO_CONFIG[id].binaryId;
+                speedCmds.push(`${(0xC0 | binaryId).toString(16).padStart(2, '0').toUpperCase()} 02 40`);
+                const home = SERVO_CONFIG[id].home;
+                const high = (home >> 7) & 0x7F;
+                const low = home & 0x7F;
+                posCmds.push(`${(0x80 | binaryId).toString(16).padStart(2, '0').toUpperCase()} ${high.toString(16).padStart(2, '0').toUpperCase()} ${low.toString(16).padStart(2, '0').toUpperCase()}`);
+            }
+            for (let i = 1; i <= 11; i++) {
+                const id = `MV${i}`;
+                const binaryId = SERVO_CONFIG[id].binaryId;
+                speedCmds.push(`${(0xC0 | binaryId).toString(16).padStart(2, '0').toUpperCase()} 02 40`);
+                const home = SERVO_CONFIG[id].home;
+                const high = (home >> 7) & 0x7F;
+                const low = home & 0x7F;
+                posCmds.push(`${(0x80 | binaryId).toString(16).padStart(2, '0').toUpperCase()} ${high.toString(16).padStart(2, '0').toUpperCase()} ${low.toString(16).padStart(2, '0').toUpperCase()}`);
+            }
+            return { speedCmds, posCmds };
         }
         
         function applySpeedMultiplier() {
@@ -1489,11 +1526,10 @@
                         frame.asciiCommand = cmdParts.join(' ');
                     }
                     
-                    const servoData = frame.servoData.map(s => ({
-                        servoId: s.servoId,
-                        angle: s.angle
-                    }));
-                    frame.icsCommand = generateICSCommand(servoData, frame.speed);
+                    const icsBatch = generateFullICSBatch(frame.servoData, frame.speed);
+                    frame.icsSpeedCmds = icsBatch.speedCmds;
+                    frame.icsPosCmds = icsBatch.posCmds;
+                    frame.icsCommandDisplay = [...icsBatch.speedCmds, ...icsBatch.posCmds].join('\n');
                 }
             }
             
@@ -1528,7 +1564,7 @@
                     asciiText += frame.asciiCommand + '\n';
                 }
                 if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                    icsText += frame.icsCommand + '\n';
+                    icsText += frame.icsCommandDisplay + '\n';
                 }
                 totalTime += frame.time;
             });
@@ -1549,7 +1585,6 @@
             activeServosSet.clear();
             servoMoveCount = {};
             
-            // 先記錄所有有輸出的伺服 (包括值為0的)
             json.frames.forEach(frame => {
                 if (frame.outputs) {
                     frame.outputs.forEach(output => {
@@ -1560,7 +1595,6 @@
                 }
             });
             
-            // 轉換每個 frame
             json.frames.forEach((frame, index) => {
                 const time = frame.transition_time_ms || 500;
                 let speed = Math.round(((2000 - time) * (127 - 10)) / (2000 - 100) + 10);
@@ -1582,7 +1616,6 @@
                 });
             });
             
-            // 計算移動次數 (用於統計)
             let lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const currentValues = originalFrames[i].values;
@@ -1594,7 +1627,6 @@
                 lastValues = {...currentValues};
             }
             
-            // 生成每個 frame 的指令
             lastValues = {};
             for (let i = 0; i < originalFrames.length; i++) {
                 const frame = originalFrames[i];
@@ -1603,7 +1635,6 @@
                 let servoData = [];
                 
                 if (i === 0) {
-                    // Frame 0: 出晒所有 servo (包括數值相同)
                     Object.keys(currentValues).forEach(servoId => {
                         servoData.push({
                             servoId: servoId,
@@ -1611,7 +1642,6 @@
                         });
                     });
                 } else {
-                    // Frame 1 之後: 只出有改變嘅 servo
                     Object.keys(currentValues).forEach(servoId => {
                         if (currentValues[servoId] !== lastValues[servoId]) {
                             servoData.push({
@@ -1628,14 +1658,16 @@
                         asciiCmd += ` ${s.servoId} ${s.angle}`;
                     });
                     
-                    const icsCmd = generateICSCommand(servoData, frame.speed);
+                    const icsBatch = generateFullICSBatch(servoData, frame.speed);
                     
                     processedFrames.push({
                         index: frame.index,
                         time: frame.time,
                         speed: frame.speed,
                         asciiCommand: asciiCmd,
-                        icsCommand: icsCmd,
+                        icsSpeedCmds: icsBatch.speedCmds,
+                        icsPosCmds: icsBatch.posCmds,
+                        icsCommandDisplay: [...icsBatch.speedCmds, ...icsBatch.posCmds].join('\n'),
                         servoCount: servoData.length,
                         servoData: servoData
                     });
@@ -1702,7 +1734,9 @@
                 commandText += `📝 ASCII:\n${frame.asciiCommand}\n\n`;
             }
             if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                commandText += `🔢 ICS:\n${frame.icsCommand}`;
+                commandText += `🔢 ICS (官方Binary):\n`;
+                commandText += `// 速度指令:\n${frame.icsSpeedCmds.join('\n')}\n`;
+                commandText += `// 位置指令:\n${frame.icsPosCmds.join('\n')}`;
             }
             
             frameTitle.textContent = `影格 ${frame.index} (${frame.time}ms) - ${frame.servoCount}個伺服 (speed ${frame.speed})`;
@@ -1722,7 +1756,8 @@
                     text += frame.asciiCommand + '\n';
                 }
                 if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                    text += '// ICS: ' + frame.icsCommand + '\n';
+                    text += `// ICS 速度指令:\n${frame.icsSpeedCmds.join('\n')}\n`;
+                    text += `// ICS 位置指令:\n${frame.icsPosCmds.join('\n')}\n`;
                 }
                 text += '\n';
             });
@@ -1737,7 +1772,8 @@
                     text += frame.asciiCommand + '\n';
                 }
                 if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                    text += '// ICS: ' + frame.icsCommand + '\n';
+                    text += `// ICS 速度指令:\n${frame.icsSpeedCmds.join('\n')}\n`;
+                    text += `// ICS 位置指令:\n${frame.icsPosCmds.join('\n')}\n`;
                 }
                 text += '\n';
             });
@@ -1751,7 +1787,7 @@
                     text += frame.asciiCommand + '\n';
                 }
                 if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                    text += frame.icsCommand + '\n';
+                    text += frame.icsCommandDisplay + '\n';
                 }
             });
             copyToClipboard(text);
@@ -1792,18 +1828,30 @@
             addLog('📤 發送 ASCII Batch');
             for (let frame of processedFrames) {
                 await sendSerialCommand(frame.asciiCommand);
+                await delay(frame.time);
             }
         }
         
         async function sendIcsBatch() {
             if (!writer || processedFrames.length === 0) return;
-            addLog('📤 發送 ICS Batch');
+            addLog('📤 發送 ICS Batch (官方Binary協議)');
             for (let frame of processedFrames) {
-                const hexParts = frame.icsCommand.split(' ');
-                const bytes = hexParts.map(b => parseInt(b, 16));
-                await writer.write(new Uint8Array(bytes));
-                addLog('📤 [ICS] ' + frame.icsCommand);
-                await delay(50);
+                // 先發送速度指令
+                for (let speedCmd of frame.icsSpeedCmds) {
+                    const hexParts = speedCmd.split(' ');
+                    const bytes = hexParts.map(b => parseInt(b, 16));
+                    await writer.write(new Uint8Array(bytes));
+                    await delay(2);
+                }
+                await delay(5);
+                // 再發送位置指令
+                for (let posCmd of frame.icsPosCmds) {
+                    const hexParts = posCmd.split(' ');
+                    const bytes = hexParts.map(b => parseInt(b, 16));
+                    await writer.write(new Uint8Array(bytes));
+                    await delay(2);
+                }
+                await delay(frame.time);
             }
         }
         
@@ -1824,10 +1872,19 @@
                 await sendSerialCommand(frame.asciiCommand);
             }
             if (currentMode === 'ICS' || currentMode === 'BOTH') {
-                const hexParts = frame.icsCommand.split(' ');
-                const bytes = hexParts.map(b => parseInt(b, 16));
-                await writer.write(new Uint8Array(bytes));
-                addLog('📤 [ICS] ' + frame.icsCommand);
+                for (let speedCmd of frame.icsSpeedCmds) {
+                    const hexParts = speedCmd.split(' ');
+                    const bytes = hexParts.map(b => parseInt(b, 16));
+                    await writer.write(new Uint8Array(bytes));
+                    await delay(2);
+                }
+                await delay(5);
+                for (let posCmd of frame.icsPosCmds) {
+                    const hexParts = posCmd.split(' ');
+                    const bytes = hexParts.map(b => parseInt(b, 16));
+                    await writer.write(new Uint8Array(bytes));
+                    await delay(2);
+                }
             }
         }
         
@@ -1847,11 +1904,26 @@
         }
         
         async function sendHome() {
+            // ASCII HOME
             await sendSerialCommand(generateHomeCommand());
+            // ICS HOME
+            const homeBatch = generateICSHomeBatch();
+            for (let speedCmd of homeBatch.speedCmds) {
+                const hexParts = speedCmd.split(' ');
+                const bytes = hexParts.map(b => parseInt(b, 16));
+                await writer.write(new Uint8Array(bytes));
+                await delay(2);
+            }
+            await delay(5);
+            for (let posCmd of homeBatch.posCmds) {
+                const hexParts = posCmd.split(' ');
+                const bytes = hexParts.map(b => parseInt(b, 16));
+                await writer.write(new Uint8Array(bytes));
+                await delay(2);
+            }
             addLog('🏠 全體回家');
         }
         
-        // ===== 串口功能 =====
         async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
@@ -1929,10 +2001,22 @@
         
         async function sendCustomCommand() {
             const cmd = customCommand.value.trim();
-            if (cmd) {
+            if (!cmd) return;
+            
+            // 檢查是否為 HEX 格式 (空格分隔的兩位十六進制)
+            const hexPattern = /^[0-9A-Fa-f]{2}( [0-9A-Fa-f]{2})*$/;
+            if (hexPattern.test(cmd)) {
+                const bytes = cmd.split(' ').map(b => parseInt(b, 16));
+                if (writer) {
+                    await writer.write(new Uint8Array(bytes));
+                    addLog('📤 [HEX] ' + cmd);
+                } else {
+                    addLog('❌ 串口未連接');
+                }
+            } else {
                 await sendSerialCommand(cmd);
-                customCommand.value = '';
             }
+            customCommand.value = '';
         }
         
         function addLog(message) {
