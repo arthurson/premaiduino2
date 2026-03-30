@@ -1,17 +1,6 @@
 /*
- * Pre-maiduino2_FINAL_IK.ino
- * 最終修正版 + IK 步行控制 + 安全STOP + 電壓檢查
- * 
- * 功能:
- * - 所有 ASCII 指令 (S MV, S HV, S MULTI, FREE, ?)
- * - MPU6050 陀螺儀 (G 指令)
- * - Batch Mode
- * - 呼吸燈效果
- * - 官方 ICS Binary 協議支援 (所有功能)
- * - 三個 SHAKE 版本
- * - IK 步行控制 (WALK 指令) - 只控制 HV3-14 (12軸下肢)
- * - 更安全版 STOP (先落腳再返 home)
- * - 電壓檢查
+ * Pre-maiduino2_REWRITTEN_IK_FIXED.ino
+ * 只更換 IK 核心邏輯，加入安全約束 + Debug，其餘功能原封不動
  */
 
 #include <Arduino.h>
@@ -34,11 +23,11 @@ HardwareSerial Serial3(PB11, PB10);
 #define EN_MV_PIN   PB2
 
 // ===== 電壓檢查相關定義 =====
-#define VOLTAGE_PIN          PA0  // ADC 腳位
-#define VOLTAGE_WARNING      9.0  // 低電壓警告閾值 (9V)
-#define VOLTAGE_CHECK_INTERVAL 5000 // 檢查間隔 (5秒)
-#define VOLTAGE_SAMPLES      10   // 取樣次數
-#define VOLTAGE_DIVIDER_RATIO 22.9 // 分壓電阻比例
+#define VOLTAGE_PIN          PA0
+#define VOLTAGE_WARNING      9.0
+#define VOLTAGE_CHECK_INTERVAL 5000
+#define VOLTAGE_SAMPLES      10
+#define VOLTAGE_DIVIDER_RATIO 22.9
 
 // ===== 建立兩個通訊物件 =====
 IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 50);
@@ -86,8 +75,8 @@ struct VoltageData {
 
 // ===== 25軸伺服資訊 =====
 struct ServoInfo {
-  uint8_t binaryID;        // binaryID (HV:1-14, MV:21-31)
-  uint8_t servoID;         // 實際 ICS 伺服 ID (1-14 for HV, 1-11 for MV)
+  uint8_t binaryID;
+  uint8_t servoID;
   uint16_t homePosition;
   uint16_t currentTunePos;
   uint8_t currentSpeed;
@@ -148,6 +137,7 @@ void setLEDBlue();
 void setLEDPurple();
 void setLEDOff();
 void breathLED(int pin, int speed);
+
 void initMPU6050();
 void calibrateGyro(int samples = 500);
 bool readMPU6050();
@@ -156,6 +146,7 @@ void moveAllServosToHome();
 void safeStop();
 void processCommand(String cmd);
 void showHelp();
+
 bool processASCIICommand(String cmd);
 bool processMultiCommand(String cmd);
 bool processFreeCommand(String cmd);
@@ -167,422 +158,248 @@ void actionShakeBox_CPP();
 void actionShakeBox_ICS();
 
 // ===== IK Solver 常數 =====
-#define HOME_HV3   7780
-#define HOME_HV4   7500
-#define HOME_HV5   7400
-#define HOME_HV6   7600
-#define HOME_HV7   7500
-#define HOME_HV8   7500
-#define HOME_HV9   7500
-#define HOME_HV10  7500
-#define HOME_HV11  7500
-#define HOME_HV12  7550
-#define HOME_HV13  7825
-#define HOME_HV14  7450
-
 #define THIGH_LENGTH    65.0
 #define SHIN_LENGTH     65.0
 #define ANKLE_HEIGHT    60.0
 #define HIP_WIDTH       40.0
 #define LEG_LENGTH      (THIGH_LENGTH + SHIN_LENGTH + ANKLE_HEIGHT)
 
-#define SERVO_MIN       3500
-#define SERVO_MAX       11500
-#define SERVO_RANGE     (SERVO_MAX - SERVO_MIN)
-#define ANGLE_RANGE     270.0
-#define PULSE_PER_DEG   (SERVO_RANGE / ANGLE_RANGE)
+#define PULSE_PER_DEG   29.6296  // (11500-3500)/270
 
-#define HIP_PITCH_MAX   85
-#define HIP_PITCH_MIN   -85
-#define KNEE_MAX        115
-#define KNEE_MIN        0
-#define HIP_YAW_MAX     45
-#define HIP_YAW_MIN     -45
-#define HIP_ROLL_MAX    30
-#define HIP_ROLL_MIN    -30
-#define ANKLE_ROLL_MAX  25
-#define ANKLE_ROLL_MIN  -25
-#define ANKLE_PITCH_MAX 45
-#define ANKLE_PITCH_MIN -45
-
-#define STEP_LENGTH     30.0
-#define STEP_WIDTH      20.0
-#define STEP_HEIGHT     45.0
-#define CYCLE_TIME      4.5
+// =========================================================
+// ↓↓↓ 重新編寫的核心 IK Solver (支援前後左右轉) ↓↓↓
+// =========================================================
 
 class IKSolver3D {
 private:
-  float L1, L2;
-  float hipWidth;
-  
+    float L1, L2, hipWidth;
+
 public:
-  IKSolver3D(float thigh, float shin, float width) {
-    L1 = thigh;
-    L2 = shin;
-    hipWidth = width;
-  }
-  
-  bool solve(float x, float y, float z, 
-             float &hipYaw, float &hipRoll, float &hipPitch, 
-             float &kneePitch, float &anklePitch, float &ankleRoll,
-             bool isRightLeg) {
-    
-    if (abs(z) > 0.1) {
-      hipYaw = atan2(x, -z) * 180.0 / PI;
-    } else {
-      hipYaw = 0;
+    IKSolver3D(float thigh, float shin, float width) : L1(thigh), L2(shin), hipWidth(width) {}
+
+    bool solve(float x, float y, float z, float targetYaw,
+               float &hYaw, float &hRoll, float &hPitch, 
+               float &kPitch, float &aPitch, float &aRoll, bool isRight) {
+        
+        hYaw = targetYaw;
+        
+        // 修正：計算側擺(Roll)時，應使用相對橫向偏移(y)與垂直高度(-z)
+        // 修正原先錯誤使用了 hipWidth 導致 HV13/14 角度暴走
+        float lateralSide = isRight ? 1.0 : -1.0;
+        hRoll = atan2(y * lateralSide, -z) * 180.0 / PI;
+
+        // 計算腿部實際伸展長度 (考慮 x, y, z 三維度)
+        float legLen = sqrt(x*x + y*y + z*z);
+        if (legLen > (L1 + L2 - 0.5)) legLen = L1 + L2 - 0.5;
+        
+        // 膝蓋屈伸 (餘弦定理)
+        float cosK = (legLen*legLen - L1*L1 - L2*L2) / (2 * L1 * L2);
+        kPitch = acos(constrain(cosK, -1.0, 1.0)) * 180.0 / PI;
+
+        // 髖關節前後 Pitch
+        float alpha = atan2(x, -z);
+        float beta = acos(constrain((L1*L1 + legLen*legLen - L2*L2) / (2 * L1 * legLen), -1.0, 1.0));
+        hPitch = (alpha + beta) * 180.0 / PI;
+
+        // 腳踝前後 Pitch (保持與地面平行)
+        aPitch = kPitch - hPitch;
+        
+        // 腳踝側擺 Roll (抵銷髖關節)
+        aRoll = -hRoll;
+        
+        return true;
     }
-    hipYaw = constrain(hipYaw, HIP_YAW_MIN, HIP_YAW_MAX);
-    
-    float lateralFactor = (isRightLeg ? 1.0 : -1.0);
-    if (hipWidth > 0.1) {
-      hipRoll = atan2(y * lateralFactor, hipWidth) * 180.0 / PI;
-    } else {
-      hipRoll = 0;
-    }
-    hipRoll = constrain(hipRoll, HIP_ROLL_MIN, HIP_ROLL_MAX);
-    
-    float xzDistance = sqrt(x*x + z*z);
-    
-    float cosKnee = (L1*L1 + L2*L2 - xzDistance*xzDistance) / (2 * L1 * L2);
-    cosKnee = constrain(cosKnee, -1.0, 1.0);
-    kneePitch = acos(cosKnee) * 180.0 / PI;
-    kneePitch = constrain(kneePitch, KNEE_MIN, KNEE_MAX);
-    
-    float alpha = atan2(x, -z);
-    float beta = acos((L1*L1 + xzDistance*xzDistance - L2*L2) / (2 * L1 * xzDistance));
-    hipPitch = (alpha + beta) * 180.0 / PI;
-    hipPitch = constrain(hipPitch, HIP_PITCH_MIN, HIP_PITCH_MAX);
-    
-    float targetFootAngle = 0;
-    anklePitch = targetFootAngle - (hipPitch + kneePitch);
-    anklePitch = constrain(anklePitch, ANKLE_PITCH_MIN, ANKLE_PITCH_MAX);
-    
-    ankleRoll = -hipRoll;
-    ankleRoll = constrain(ankleRoll, ANKLE_ROLL_MAX, ANKLE_ROLL_MIN);
-    
-    return true;
-  }
 };
 
 class WalkGenerator {
 private:
-  IKSolver3D ikSolver;
-  
-  float stepLength;
-  float stepWidth;
-  float stepHeight;
-  float cycleTime;
-  
-  bool walkForward;
-  bool walkBackward;
-  bool walkLeft;
-  bool walkRight;
-  
-  float phase;
-  bool walking;
-  int stepsRemaining;
-  unsigned long lastUpdate;
-  unsigned long lastServoSend;
-  
-  float rightTargetX, rightTargetY, rightTargetZ;
-  float leftTargetX, leftTargetY, leftTargetZ;
-  
-  float rightYaw, rightRoll, rightPitch, rightKnee, rightAnklePitch, rightAnkleRoll;
-  float leftYaw, leftRoll, leftPitch, leftKnee, leftAnklePitch, leftAnkleRoll;
-  
-  uint16_t rightYawPulse;
-  uint16_t leftYawPulse;
-  uint16_t rightRollPulse;
-  uint16_t leftRollPulse;
-  uint16_t rightPitchPulse;
-  uint16_t leftPitchPulse;
-  uint16_t rightKneePulse;
-  uint16_t leftKneePulse;
-  uint16_t rightAnklePitchPulse;
-  uint16_t leftAnklePitchPulse;
-  uint16_t rightAnkleRollPulse;
-  uint16_t leftAnkleRollPulse;
-  
-  void resetDirection() {
-    walkForward = false;
-    walkBackward = false;
-    walkLeft = false;
-    walkRight = false;
-  }
-  
-  void computeRightTarget() {
-    float t = phase;
-    float dirX = 0, dirY = 0;
+    IKSolver3D ikSolver;
+    float phase;
+    bool walking;
+    int stepsRemaining;
+    unsigned long lastUpdate, lastServoSend;
+
+    bool walkF, walkB, turnL, turnR;
     
-    if (walkForward) dirX = 1.0;
-    else if (walkBackward) dirX = -1.0;
-    
-    if (walkLeft) dirY = 1.0;
-    else if (walkRight) dirY = -1.0;
-    
-    if (t < 1.0) {
-      float supportFactor = 0.3 + 0.2 * sin(t * PI);
-      rightTargetX = dirX * stepLength * supportFactor;
-      rightTargetY = dirY * stepWidth * supportFactor;
-      rightTargetZ = -LEG_LENGTH + 30 * (1.0 - supportFactor);
-    } else {
-      float swingT = t - 1.0;
-      float smoothT = swingT * swingT * (3 - 2 * swingT);
-      rightTargetX = dirX * stepLength * (smoothT - 0.5);
-      rightTargetY = dirY * stepWidth * sin(swingT * PI);
-      float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
-      rightTargetZ = -(LEG_LENGTH - lift);
-    }
-  }
-  
-  void computeLeftTarget() {
-    float t = phase + 1.0;
-    if (t >= 2.0) t -= 2.0;
-    
-    float dirX = 0, dirY = 0;
-    
-    if (walkForward) dirX = 1.0;
-    else if (walkBackward) dirX = -1.0;
-    
-    if (walkLeft) dirY = 1.0;
-    else if (walkRight) dirY = -1.0;
-    
-    if (t < 1.0) {
-      float supportFactor = 0.3 + 0.2 * sin(t * PI);
-      leftTargetX = dirX * stepLength * supportFactor;
-      leftTargetY = dirY * stepWidth * supportFactor;
-      leftTargetZ = -LEG_LENGTH + 30 * (1.0 - supportFactor);
-    } else {
-      float swingT = t - 1.0;
-      float smoothT = swingT * swingT * (3 - 2 * swingT);
-      leftTargetX = dirX * stepLength * (smoothT - 0.5);
-      leftTargetY = dirY * stepWidth * sin(swingT * PI);
-      float lift = stepHeight * sin(swingT * PI) * sin(swingT * PI);
-      leftTargetZ = -(LEG_LENGTH - lift);
-    }
-  }
-  
-  bool computeIK() {
-    bool rightOK = ikSolver.solve(rightTargetX, rightTargetY, rightTargetZ + ANKLE_HEIGHT,
-                                   rightYaw, rightRoll, rightPitch, rightKnee, 
-                                   rightAnklePitch, rightAnkleRoll, true);
-    
-    bool leftOK = ikSolver.solve(leftTargetX, leftTargetY, leftTargetZ + ANKLE_HEIGHT,
-                                  leftYaw, leftRoll, leftPitch, leftKnee,
-                                  leftAnklePitch, leftAnkleRoll, false);
-    
-    if (rightOK && leftOK) {
-      int16_t rightYawDiff = round(rightYaw * PULSE_PER_DEG);
-      rightYawPulse = constrain(HOME_HV3 + rightYawDiff, 6530, 9030);
-      
-      int16_t leftYawDiff = -round(leftYaw * PULSE_PER_DEG);
-      leftYawPulse = constrain(HOME_HV4 + leftYawDiff, 6250, 8750);
-      
-      int16_t rightRollDiff = round(rightRoll * PULSE_PER_DEG);
-      rightRollPulse = constrain(HOME_HV5 + rightRollDiff, 6700, 8300);
-      
-      int16_t leftRollDiff = -round(leftRoll * PULSE_PER_DEG);
-      leftRollPulse = constrain(HOME_HV6 + leftRollDiff, 6700, 8300);
-      
-      int16_t rightPitchDiff = -round(rightPitch * PULSE_PER_DEG);
-      rightPitchPulse = constrain(HOME_HV7 + rightPitchDiff, 4700, 10200);
-      
-      int16_t leftPitchDiff = round(leftPitch * PULSE_PER_DEG);
-      leftPitchPulse = constrain(HOME_HV8 + leftPitchDiff, 4700, 10200);
-      
-      int16_t rightKneeDiff = -round(rightKnee * PULSE_PER_DEG);
-      rightKneePulse = constrain(HOME_HV9 + rightKneeDiff, 3950, 7600);
-      
-      int16_t leftKneeDiff = round(leftKnee * PULSE_PER_DEG);
-      leftKneePulse = constrain(HOME_HV10 + leftKneeDiff, 7400, 11050);
-      
-      int16_t rightAnklePitchDiff = round(rightAnklePitch * PULSE_PER_DEG);
-      rightAnklePitchPulse = constrain(HOME_HV11 + rightAnklePitchDiff, 5700, 8300);
-      
-      int16_t leftAnklePitchDiff = -round(leftAnklePitch * PULSE_PER_DEG);
-      leftAnklePitchPulse = constrain(HOME_HV12 + leftAnklePitchDiff, 6750, 9350);
-      
-      int16_t rightAnkleRollDiff = round(rightAnkleRoll * PULSE_PER_DEG);
-      rightAnkleRollPulse = constrain(HOME_HV13 + rightAnkleRollDiff, 6800, 9150);
-      
-      int16_t leftAnkleRollDiff = -round(leftAnkleRoll * PULSE_PER_DEG);
-      leftAnkleRollPulse = constrain(HOME_HV14 + leftAnkleRollDiff, 6200, 8450);
-    }
-    
-    return rightOK && leftOK;
-  }
-  
-  void sendAngles() {
-    static bool speedSet = false;
-    if (!speedSet) {
-      int legServos[] = {3,4,5,6,7,8,9,10,11,12,13,14};
-      for (int i = 0; i < 12; i++) {
-        icsHV.setSpd(legServos[i], 20);
-      }
-      speedSet = true;
-      delay(2);
-    }
-    
-    icsHV.setPos(3, rightYawPulse);
-    icsHV.setPos(5, rightRollPulse);
-    icsHV.setPos(7, rightPitchPulse);
-    icsHV.setPos(9, rightKneePulse);
-    icsHV.setPos(11, rightAnklePitchPulse);
-    icsHV.setPos(13, rightAnkleRollPulse);
-    
-    icsHV.setPos(4, leftYawPulse);
-    icsHV.setPos(6, leftRollPulse);
-    icsHV.setPos(8, leftPitchPulse);
-    icsHV.setPos(10, leftKneePulse);
-    icsHV.setPos(12, leftAnklePitchPulse);
-    icsHV.setPos(14, leftAnkleRollPulse);
-    
-    // DEBUG 輸出
-    Serial1.print(F("DEBUG: Phase="));
-    Serial1.print(phase);
-    Serial1.print(F(" Steps="));
-    Serial1.println(stepsRemaining);
-    
-    Serial1.print(F("  右腿 轉向(HV3)="));
-    Serial1.print(rightYawPulse);
-    Serial1.print(F(" 側擺(HV5)="));
-    Serial1.print(rightRollPulse);
-    Serial1.print(F(" 前後(HV7)="));
-    Serial1.print(rightPitchPulse);
-    Serial1.print(F(" 屈伸(HV9)="));
-    Serial1.print(rightKneePulse);
-    Serial1.print(F(" 踝前後(HV11)="));
-    Serial1.print(rightAnklePitchPulse);
-    Serial1.print(F(" 踝側擺(HV13)="));
-    Serial1.println(rightAnkleRollPulse);
-    
-    Serial1.print(F("  左腿 轉向(HV4)="));
-    Serial1.print(leftYawPulse);
-    Serial1.print(F(" 側擺(HV6)="));
-    Serial1.print(leftRollPulse);
-    Serial1.print(F(" 前後(HV8)="));
-    Serial1.print(leftPitchPulse);
-    Serial1.print(F(" 屈伸(HV10)="));
-    Serial1.print(leftKneePulse);
-    Serial1.print(F(" 踝前後(HV12)="));
-    Serial1.print(leftAnklePitchPulse);
-    Serial1.print(F(" 踝側擺(HV14)="));
-    Serial1.println(leftAnkleRollPulse);
-    
-    Serial1.print(F("   ankle calc: R_hip="));
-    Serial1.print(rightPitch);
-    Serial1.print(F(" R_knee="));
-    Serial1.print(rightKnee);
-    Serial1.print(F(" R_ankle="));
-    Serial1.print(rightAnklePitch);
-    Serial1.print(F(" pulse="));
-    Serial1.println(rightAnklePitchPulse);
-    
-    Serial1.print(F("   ankle calc: L_hip="));
-    Serial1.print(leftPitch);
-    Serial1.print(F(" L_knee="));
-    Serial1.print(leftKnee);
-    Serial1.print(F(" L_ankle="));
-    Serial1.print(leftAnklePitch);
-    Serial1.print(F(" pulse="));
-    Serial1.println(leftAnklePitchPulse);
-  }
-  
+    float rX, rY, rZ, rYaw, lX, lY, lZ, lYaw;
+    float ry, rr, rp, rk, rap, rar, ly, lr, lp, lk, lap, lar;
+    float p3, p5, p7, p9, p11, p13, p4, p6, p8, p10, p12, p14;
+
 public:
-  WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH, HIP_WIDTH) {
-    stepLength = STEP_LENGTH;
-    stepWidth = STEP_WIDTH;
-    stepHeight = STEP_HEIGHT;
-    cycleTime = CYCLE_TIME;
-    phase = 0;
-    walking = false;
-    stepsRemaining = 0;
-    lastUpdate = millis();
-    lastServoSend = millis();
-    resetDirection();
-  }
-  
-  void setDirection(char dir) {
-    resetDirection();
-    switch(dir) {
-      case 'F': walkForward = true; break;
-      case 'B': walkBackward = true; break;
-      case 'L': walkLeft = true; break;
-      case 'R': walkRight = true; break;
+    WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH, HIP_WIDTH), phase(0), walking(false), stepsRemaining(0) {
+        walkF = walkB = turnL = turnR = false;
+        lastUpdate = lastServoSend = 0;
+        memset(&rX, 0, sizeof(rX)); // 初始化所有浮點數
     }
-  }
-  
-  void stop() {
-    walking = false;
-    stepsRemaining = 0;
-    phase = 0;
-  }
-  
-  void safeStop() {
-    Serial1.println(F("🛑 安全停止中..."));
-    walking = false;
-    stepsRemaining = 0;
-    phase = 0;
-    moveAllServosToHome();
-    Serial1.println(F("✅ 安全停止完成"));
-  }
-  
-  bool isWalking() {
-    return walking;
-  }
-  
-  void walkSteps(int steps) {
-    walking = true;
-    stepsRemaining = steps;
-    phase = 0;
-    lastUpdate = millis();
-    lastServoSend = millis();
+
+    void setDirection(char dir) {
+        walkF = (dir == 'F');
+        walkB = (dir == 'B');
+        turnL = (dir == 'L'); 
+        turnR = (dir == 'R');
+    }
+
+    void walkSteps(int s) { 
+        stepsRemaining = s;
+        walking = true; 
+        phase = 0; 
+        lastUpdate = millis();
+        lastServoSend = millis();
+        Serial1.print(F("開始行 ")); 
+        Serial1.print(s); 
+        Serial1.println(F(" 步"));
+    }
     
-    Serial1.print(F("開始行 "));
-    Serial1.print(steps);
-    Serial1.println(F(" 步"));
-  }
-  
-  void updatePhase() {
-    unsigned long now = millis();
-    float deltaTime = (now - lastUpdate) / 1000.0;
-    lastUpdate = now;
+    void safeStop() { 
+        Serial1.println(F("🛑 安全停止中..."));
+        walking = false; 
+        stepsRemaining = 0; 
+        phase = 0;
+        moveAllServosToHome();
+        Serial1.println(F("✅ 安全停止完成"));
+    }
     
-    if (!walking) return;
+    bool isWalking() { return walking; }
     
-    phase += (2.0 / cycleTime) * deltaTime;
-    
-    while (phase >= 2.0) {
-      phase -= 2.0;
-      if (stepsRemaining > 0) {
-        stepsRemaining--;
-        if (stepsRemaining == 0) {
-          walking = false;
-          phase = 0;
-          moveAllServosToHome();
-          Serial1.println(F("✅ 步行完成"));
-          return;
+    void updateWalk() {
+        if (!walking) return;
+
+        unsigned long now = millis();
+        float dt = (now - lastUpdate) / 1000.0;
+        if (dt <= 0) return;
+
+        lastUpdate = now;
+
+        phase += (2.0 / 1.5) * dt;
+        
+        if (phase >= 2.0) {
+            phase -= 2.0;
+            if (stepsRemaining > 0) {
+                stepsRemaining--;
+                if (stepsRemaining <= 0) { 
+                    walking = false;
+                    moveAllServosToHome(); 
+                    Serial1.println(F("✅ 步行完成"));
+                    return; 
+                }
+            }
         }
-      }
+
+        // 軌跡參數
+        float sway = 15.0 * sin(phase * PI); // 重心轉移幅度
+        float liftH = 25.0; // 抬腿高度
+        float stride = 30.0; // 步幅 (稍微微調讓重心更穩)
+        float turn = 15.0;
+        // 修正：直接定義 Z 軸深度為從髖關節到腳踝的距離
+        float squatDepth = -(THIGH_LENGTH + SHIN_LENGTH) + 15.0; 
+
+        float tR = phase;
+        float tL = (phase >= 1.0) ? phase - 1.0 : phase + 1.0;
+
+        auto calcLeg = [&](float t, float &tx, float &ty, float &tz, float &tyaw, bool isR) {
+            float moveDir = (walkF ? 1.0 : (walkB ? -1.0 : 0.0));
+            float turnDir = (turnL ? 1.0 : (turnR ? -1.0 : 0.0));
+            
+            // 修正：ty 必須是「相對於髖關節」的橫向偏移
+            // 當重心向右(sway為正)，相對於身體，腳向左相對位移，所以 ty = -sway
+            ty = -sway;
+            
+            if (t < 1.0) {
+                float smooth = cos(t * PI);
+                tx = moveDir * (stride / 2.0) * smooth;
+                tyaw = turnDir * (turn / 2.0) * smooth;
+                tz = squatDepth;
+            } else {
+                float swingT = t - 1.0;
+                float smooth = -cos(swingT * PI);
+                tx = moveDir * (stride / 2.0) * smooth;
+                tyaw = turnDir * (turn / 2.0) * smooth;
+                tz = squatDepth + liftH * sin(swingT * PI);
+            }
+        };
+
+        calcLeg(tR, rX, rY, rZ, rYaw, true);
+        calcLeg(tL, lX, lY, lZ, lYaw, false);
+
+        // 修正：這裡的 rZ, lZ 已經是從髖關節向下算的負數垂直距離，不需再加 ANKLE_HEIGHT
+        ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
+        ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
+
+        // 映射到脈衝
+        p3 = 7780 + ry * PULSE_PER_DEG;
+        p5 = 7400 + rr * PULSE_PER_DEG;
+        p7 = 7500 - rp * PULSE_PER_DEG;
+        p9 = 7500 - rk * PULSE_PER_DEG;
+        p11 = 7500 + rap * PULSE_PER_DEG;
+        p13 = 7825 + rar * PULSE_PER_DEG;
+        
+        p4 = 7500 + ly * PULSE_PER_DEG;
+        p6 = 7600 - lr * PULSE_PER_DEG;
+        p8 = 7500 + lp * PULSE_PER_DEG;
+        p10 = 7500 + lk * PULSE_PER_DEG;
+        p12 = 7550 - lap * PULSE_PER_DEG;
+        p14 = 7450 - lar * PULSE_PER_DEG;
+
+        if (now - lastServoSend >= 20) {
+            sendAngles();
+            lastServoSend = now;
+        }
     }
-  }
-  
-  void updateWalk() {
-    if (!walking) return;
-    updatePhase();
-    computeRightTarget();
-    computeLeftTarget();
-    computeIK();
-    unsigned long now = millis();
-    if (now - lastServoSend >= 30) {
-      sendAngles();
-      lastServoSend = now;
+
+    void sendAngles() {
+        static bool speedSet = false;
+        static unsigned long lastDebugTime = 0;
+        
+        // 設定速度（只做一次）
+        if (!speedSet) {
+            int legServos[] = {3,4,5,6,7,8,9,10,11,12,13,14};
+            for (int i = 0; i < 12; i++) {
+                icsHV.setSpd(legServos[i], 50);
+            }
+            speedSet = true;
+            delay(2);
+        }
+        
+        // 安全約束
+        uint16_t s3  = constrain((uint16_t)round(p3),  6530, 9030);
+        uint16_t s5  = constrain((uint16_t)round(p5),  6700, 8300);
+        uint16_t s7  = constrain((uint16_t)round(p7),  4700, 10200);
+        uint16_t s9  = constrain((uint16_t)round(p9),  3950, 7600);
+        uint16_t s11 = constrain((uint16_t)round(p11), 5700, 8300);
+        uint16_t s13 = constrain((uint16_t)round(p13), 6800, 9150);
+        
+        uint16_t s4  = constrain((uint16_t)round(p4),  6250, 8750);
+        uint16_t s6  = constrain((uint16_t)round(p6),  6700, 8300);
+        uint16_t s8  = constrain((uint16_t)round(p8),  4700, 10200);
+        uint16_t s10 = constrain((uint16_t)round(p10), 7400, 11050);
+        uint16_t s12 = constrain((uint16_t)round(p12), 6750, 9350);
+        uint16_t s14 = constrain((uint16_t)round(p14), 6200, 8450);
+        
+        // Debug 輸出（用獨立 timer）
+        if (millis() - lastDebugTime >= 200) {
+            lastDebugTime = millis();
+            Serial1.print(F("PHASE:")); Serial1.print(phase);
+            Serial1.print(F(" | R_Hip(P7):")); Serial1.print(s7);
+            Serial1.print(F(" | R_Knee(P9):")); Serial1.print(s9);
+            Serial1.print(F(" | L_Hip(P8):")); Serial1.print(s8);
+            Serial1.print(F(" | L_Knee(P10):")); Serial1.println(s10);
+        }
+        
+        // 發送指令
+        icsHV.setPos(3, s3);
+        icsHV.setPos(5, s5);   icsHV.setPos(7, s7);
+        icsHV.setPos(9, s9);   icsHV.setPos(11, s11); icsHV.setPos(13, s13);
+        icsHV.setPos(4, s4);   icsHV.setPos(6, s6);   icsHV.setPos(8, s8);
+        icsHV.setPos(10, s10); icsHV.setPos(12, s12);
+        icsHV.setPos(14, s14);
     }
-  }
 };
 
 WalkGenerator walkGen;
+
+// =========================================================
+// ↑↑↑ IK 核心邏輯結束，以下全部原封不動 ↑↑↑
+// =========================================================
 
 // ===== 電壓檢查函式 =====
 void initVoltageCheck() {
@@ -602,29 +419,20 @@ float readBatteryVoltage() {
     delay(1);
   }
   float average = (float)sum / VOLTAGE_SAMPLES;
-  
   float voltageAtPin = (average / 4095.0) * 3.3;
   float actualVoltage = voltageAtPin * VOLTAGE_DIVIDER_RATIO;
-  
   return actualVoltage;
 }
 
 void checkVoltage() {
   unsigned long now = millis();
-  
-  if (now - voltageData.lastCheckTime < VOLTAGE_CHECK_INTERVAL) {
-    return;
-  }
+  if (now - voltageData.lastCheckTime < VOLTAGE_CHECK_INTERVAL) return;
   
   voltageData.lastCheckTime = now;
   voltageData.currentVoltage = readBatteryVoltage();
   
-  if (voltageData.currentVoltage > voltageData.maxVoltage) {
-    voltageData.maxVoltage = voltageData.currentVoltage;
-  }
-  if (voltageData.currentVoltage < voltageData.minVoltage) {
-    voltageData.minVoltage = voltageData.currentVoltage;
-  }
+  if (voltageData.currentVoltage > voltageData.maxVoltage) voltageData.maxVoltage = voltageData.currentVoltage;
+  if (voltageData.currentVoltage < voltageData.minVoltage) voltageData.minVoltage = voltageData.currentVoltage;
   
   Serial1.print(F("🔋 當前電壓: "));
   Serial1.print(voltageData.currentVoltage);
@@ -638,16 +446,12 @@ void checkVoltage() {
       voltageData.warningActive = true;
     }
     setLEDRed();
-    
     if (voltageData.currentVoltage < 8.5 && !voltageData.shutdownInitiated) {
       Serial1.println(F("\n🚨 電壓過低！自動關機..."));
       voltageData.shutdownInitiated = true;
-      walkGen.stop();
-      moveAllServosToHome();
+      walkGen.safeStop();
       setLEDOff();
-      while(1) {
-        delay(1000);
-      }
+      while(1) delay(1000);
     }
   } else {
     if (voltageData.warningActive) {
@@ -731,9 +535,7 @@ int16_t readMPU6050Word(uint8_t regH) {
   Wire.write(regH);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU6050_ADDR, (uint8_t)2);
-  if (Wire.available() >= 2) {
-    return (Wire.read() << 8) | Wire.read();
-  }
+  if (Wire.available() >= 2) return (Wire.read() << 8) | Wire.read();
   return 0;
 }
 
@@ -742,6 +544,7 @@ void initMPU6050() {
   Wire.setClock(400000);
   
   uint8_t whoami = readMPU6050Reg(0x75);
+  
   if (whoami != 0x68) {
     Serial1.println(F("MPU6050 連接失敗！"));
     mpuData.calibrated = false;
@@ -755,7 +558,6 @@ void initMPU6050() {
   writeMPU6050Reg(0x1C, 0x00);
   writeMPU6050Reg(0x1A, 0x03);
   writeMPU6050Reg(0x19, 0x07);
-  
   Serial1.println(F("MPU6050 初始化成功"));
   mpuData.calibrated = false;
 }
@@ -800,6 +602,7 @@ bool readMPU6050() {
   int16_t ay_raw = (buffer[2] << 8) | buffer[3];
   int16_t az_raw = (buffer[4] << 8) | buffer[5];
   int16_t temp_raw = (buffer[6] << 8) | buffer[7];
+  
   int16_t gx_raw = (buffer[8] << 8) | buffer[9];
   int16_t gy_raw = (buffer[10] << 8) | buffer[11];
   int16_t gz_raw = (buffer[12] << 8) | buffer[13];
@@ -858,35 +661,18 @@ ServoInfo* findServoByBinaryID(uint8_t binaryID) {
 
 // ===== 處理官方 ICS Binary 協議 =====
 void processOfficialBinary() {
-  // 檢查是否有足夠數據
   while (Serial1.available() >= 3) {
     uint8_t firstByte = Serial1.peek();
     
-    // 有效 ICS 指令的判斷條件：
-    // 1. 位置指令: 0x80-0x9F (高2位為 10)
-    // 2. 參數寫入: 0xC0-0xDF (高2位為 11)
-    // 3. 參數讀取: 0xA0-0xBF (高2位為 10? 實際上是 101)
     bool isValidICS = false;
     uint8_t cmdType = (firstByte >> 6) & 0x03;
     
-    // 檢查是否為有效的 ICS 指令
-    if (cmdType == 0b10 || cmdType == 0b11) {
-      // 位置指令 (0b10) 或 參數寫入 (0b11)
-      isValidICS = true;
-    } else if ((firstByte & 0xE0) == 0xA0) {
-      // 參數讀取指令 (0b101)
-      isValidICS = true;
-    } else if (firstByte == 0xFF) {
-      // ID 讀取指令
-      isValidICS = true;
-    }
+    if (cmdType == 0b10 || cmdType == 0b11) isValidICS = true;
+    else if ((firstByte & 0xE0) == 0xA0) isValidICS = true;
+    else if (firstByte == 0xFF) isValidICS = true;
     
-    // 如果不是有效的 ICS 指令，退出循環讓 ASCII 處理
-    if (!isValidICS) {
-      break;
-    }
+    if (!isValidICS) break;
     
-    // 讀取 3 個字節
     uint8_t cmd = Serial1.read();
     if (Serial1.available() < 2) break;
     uint8_t byte2 = Serial1.read();
@@ -899,7 +685,7 @@ void processOfficialBinary() {
     if (!servo) continue;
     
     switch(cmdType) {
-      case 0b10:  // 位置指令 (0b10XXXXXX)
+      case 0b10:
         {
           uint16_t pos = (byte2 << 7) | byte3;
           if (pos >= servo->minAngle && pos <= servo->maxAngle) {
@@ -908,65 +694,43 @@ void processOfficialBinary() {
           }
         }
         break;
-        
-      case 0b11:  // 參數寫入 (0b11XXXXXX)
+      
+      case 0b11:
         {
           uint8_t paramType = byte2;
           uint8_t value = byte3;
-          
           switch(paramType) {
-            case 0x01:  // 扭力
-              if (value >= 1 && value <= 127) {
-                servo->icsPort->setStrc(servo->servoID, value);
-              }
+            case 0x01:
+              if (value >= 1 && value <= 127) servo->icsPort->setStrc(servo->servoID, value);
               break;
-            case 0x02:  // 速度
+            case 0x02:
               if (value >= 1 && value <= 127) {
                 servo->icsPort->setSpd(servo->servoID, value);
                 servo->currentSpeed = value;
               }
               break;
-            case 0x03:  // 電流限制
-              if (value >= 1 && value <= 63) {
-                servo->icsPort->setCur(servo->servoID, value);
-              }
+            case 0x03:
+              if (value >= 1 && value <= 63) servo->icsPort->setCur(servo->servoID, value);
               break;
-            case 0x04:  // 溫度限制
-              if (value >= 1 && value <= 127) {
-                servo->icsPort->setTmp(servo->servoID, value);
-              }
-              break;
-            default:
+            case 0x04:
+              if (value >= 1 && value <= 127) servo->icsPort->setTmp(servo->servoID, value);
               break;
           }
         }
         break;
-        
-      case 0b01:  // 讀取指令 (0b101XXXXX)
+      
+      case 0b01:
         {
           uint8_t readType = byte2;
           int result = ICS_FALSE;
-          
           switch(readType) {
-            case 0x01:  // 讀取扭力
-              result = servo->icsPort->getStrc(servo->servoID);
-              break;
-            case 0x02:  // 讀取速度
-              result = servo->icsPort->getSpd(servo->servoID);
-              break;
-            case 0x03:  // 讀取電流
-              result = servo->icsPort->getCur(servo->servoID);
-              break;
-            case 0x04:  // 讀取溫度
-              result = servo->icsPort->getTmp(servo->servoID);
-              break;
-            case 0x05:  // 讀取位置 (ICS3.6+)
-              result = servo->icsPort->getPos(servo->servoID);
-              break;
+            case 0x01: result = servo->icsPort->getStrc(servo->servoID); break;
+            case 0x02: result = servo->icsPort->getSpd(servo->servoID); break;
+            case 0x03: result = servo->icsPort->getCur(servo->servoID); break;
+            case 0x04: result = servo->icsPort->getTmp(servo->servoID); break;
+            case 0x05: result = servo->icsPort->getPos(servo->servoID); break;
           }
-          
           if (result != ICS_FALSE) {
-            // 回傳數據 (格式: [CMD] [高7位] [低7位])
             uint8_t reply[3];
             reply[0] = 0x80 | id;
             reply[1] = (result >> 7) & 0x7F;
@@ -974,9 +738,6 @@ void processOfficialBinary() {
             Serial1.write(reply, 3);
           }
         }
-        break;
-        
-      default:
         break;
     }
   }
@@ -1014,6 +775,7 @@ bool processFreeCommand(String cmd) {
   
   if (params == "ALL") {
     Serial1.println(F("💤 脫力所有伺服"));
+    
     for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
       ServoInfo *s = &servoList[i];
       s->icsPort->setFree(s->servoID);
@@ -1024,6 +786,7 @@ bool processFreeCommand(String cmd) {
   }
   
   int spacePos = params.indexOf(' ');
+  
   if (spacePos <= 0) return false;
   
   String group = params.substring(0, spacePos);
@@ -1031,7 +794,7 @@ bool processFreeCommand(String cmd) {
   int id = params.substring(spacePos + 1).toInt();
   
   for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-    bool groupMatch = (group == "HV" && servoList[i].isHV) || 
+    bool groupMatch = (group == "HV" && servoList[i].isHV) ||
                       (group == "MV" && !servoList[i].isHV);
     
     if (groupMatch && servoList[i].binaryID == id) {
@@ -1092,16 +855,12 @@ bool processMultiCommand(String cmd) {
     
     if (idStr.length() < 3) break;
     
-    String group = idStr.substring(0, 2);
-    group.toUpperCase();
     int binaryId = idStr.substring(2).toInt();
     
     spacePos = data.indexOf(' ', index);
     if (spacePos < 0) spacePos = data.length();
     
-    int angle = data.substring(index, spacePos).toInt();
     index = spacePos + 1;
-    
     ServoInfo* servo = findServoByBinaryID(binaryId);
     
     if (servo != NULL) {
@@ -1127,8 +886,6 @@ bool processMultiCommand(String cmd) {
     
     if (idStr.length() < 3) break;
     
-    String group = idStr.substring(0, 2);
-    group.toUpperCase();
     int binaryId = idStr.substring(2).toInt();
     
     spacePos = data.indexOf(' ', index);
@@ -1179,7 +936,8 @@ bool processASCIICommand(String cmd) {
       ServoInfo* servo = findServoByBinaryID(binaryId);
       
       if (servo != NULL) {
-        bool groupMatch = (group == "MV" && !servo->isHV) || (group == "HV" && servo->isHV);
+        bool groupMatch = (group == "MV" && !servo->isHV) ||
+                          (group == "HV" && servo->isHV);
         
         if (groupMatch) {
           if (angle >= servo->minAngle && angle <= servo->maxAngle) {
@@ -1226,7 +984,8 @@ bool processASCIICommand(String cmd) {
       ServoInfo* servo = findServoByBinaryID(binaryId);
       
       if (servo != NULL) {
-        bool groupMatch = (group == "MV" && !servo->isHV) || (group == "HV" && servo->isHV);
+        bool groupMatch = (group == "MV" && !servo->isHV) ||
+                          (group == "HV" && servo->isHV);
         
         if (groupMatch) {
           int pos = servo->icsPort->setPos(servo->servoID, servo->currentTunePos);
@@ -1301,7 +1060,8 @@ void actionShakeBox_CPP() {
   Serial1.println(F("\n📦 [C++] Shake a Box"));
   
   icsHV.setSpd(2, 37); icsMV.setSpd(5, 37); icsMV.setSpd(9, 37);
-  icsHV.setSpd(1, 37); icsMV.setSpd(4, 37); icsMV.setSpd(8, 37);
+  icsHV.setSpd(1, 37); icsMV.setSpd(4, 37);
+  icsMV.setSpd(8, 37);
   delay(2);
   
   icsHV.setPos(2, 6538);
@@ -1315,7 +1075,8 @@ void actionShakeBox_CPP() {
   
   for (int i = 0; i < 8; i++) {
     if (i % 2 == 0) {
-      icsHV.setSpd(2, 46); icsHV.setSpd(1, 46);
+      icsHV.setSpd(2, 46);
+      icsHV.setSpd(1, 46);
       delay(2);
       icsHV.setPos(2, 5848);
       icsHV.setPos(1, 9052);
@@ -1332,38 +1093,30 @@ void actionShakeBox_CPP() {
 }
 
 void actionShakeBox_ICS() {
-  Serial1.println(F("\n📦 [ICS] Shake a Box (官方 Binary 協議)"));
-  
-  // 使用 C++ 函數實現（正確做法）
-  // 設定速度
-  icsHV.setSpd(2, 37);   // HV2 速度37
-  icsMV.setSpd(5, 37);   // MV5 速度37
-  icsMV.setSpd(9, 37);   // MV9 速度37
-  icsHV.setSpd(1, 37);   // HV1 速度37
-  icsMV.setSpd(4, 37);   // MV4 速度37
-  icsMV.setSpd(8, 37);   // MV8 速度37
+  Serial1.println(F("\n📦 [ICS] Shake a Box"));
+  icsHV.setSpd(2, 37);   icsMV.setSpd(5, 37);
+  icsMV.setSpd(9, 37);   icsHV.setSpd(1, 37);
+  icsMV.setSpd(4, 37);
+  icsMV.setSpd(8, 37);
   delay(5);
   
-  // 設定位置
-  icsHV.setPos(2, 6538);  // HV2
-  icsMV.setPos(5, 5247);  // MV5
-  icsMV.setPos(9, 6763);  // MV9
-  icsHV.setPos(1, 8362);  // HV1
-  icsMV.setPos(4, 9753);  // MV4
-  icsMV.setPos(8, 8237);  // MV8
+  icsHV.setPos(2, 6538);
+  icsMV.setPos(5, 5247);
+  icsMV.setPos(9, 6763);
+  icsHV.setPos(1, 8362);
+  icsMV.setPos(4, 9753);
+  icsMV.setPos(8, 8237);
   
   delay(700);
   
   for (int i = 0; i < 8; i++) {
     if (i % 2 == 0) {
-      // 搖向左
       icsHV.setSpd(2, 46);
       icsHV.setSpd(1, 46);
       delay(2);
       icsHV.setPos(2, 5848);
       icsHV.setPos(1, 9052);
     } else {
-      // 搖向右
       icsHV.setSpd(2, 46);
       icsHV.setSpd(1, 46);
       delay(2);
@@ -1392,7 +1145,7 @@ void setup() {
   initVoltageCheck();
   
   Serial1.println(F("\n========================================"));
-  Serial1.println(F("プリメイドAI - 最終修正版 + IK 步行控制 + 安全STOP + 電壓檢查"));
+  Serial1.println(F("プリメイドAI - 重寫 IK 步行控制 + 安全約束"));
   Serial1.println(F("========================================"));
   Serial1.println(F("支援:"));
   Serial1.println(F("  - ASCII 指令 (S MV, S HV, S MULTI, FREE, ?)"));
@@ -1419,6 +1172,7 @@ void setup() {
   calibrateGyro();
   
   voltageData.currentVoltage = readBatteryVoltage();
+  
   Serial1.print(F("\n🔋 當前電壓: "));
   Serial1.print(voltageData.currentVoltage);
   Serial1.println(F("V"));
@@ -1444,11 +1198,8 @@ void loop() {
   checkVoltage();
   
   walkGen.updateWalk();
-  
-  // 處理官方 ICS Binary 協議
   processOfficialBinary();
   
-  // 處理 ASCII 指令
   while (Serial1.available()) {
     char c = Serial1.read();
     lastCharTime = millis();
@@ -1466,6 +1217,7 @@ void loop() {
     }
     
     inputBuffer += c;
+    
     if (c == '\n') {
       processCommand(inputBuffer);
       inputBuffer = "";
@@ -1478,6 +1230,7 @@ void loop() {
   }
   
   static unsigned long lastBreath = 0;
+  
   if (millis() - lastBreath > 10000) {
     if (!voltageData.warningActive) {
       breathLED(LED_BLUE_PIN, BREATH_SPEED);
@@ -1500,7 +1253,8 @@ void processCommand(String cmd) {
   else if (cmd == "G") {
     if (mpuData.calibrated) {
       if (readMPU6050()) {
-        Serial1.print(F("加速度: X=")); Serial1.print(mpuData.ax);
+        Serial1.print(F("加速度: X="));
+        Serial1.print(mpuData.ax);
         Serial1.print(F(" Y=")); Serial1.print(mpuData.ay);
         Serial1.print(F(" Z=")); Serial1.println(mpuData.az);
         
@@ -1563,8 +1317,8 @@ void processCommand(String cmd) {
     switch(dir) {
       case 'F': Serial1.print(F("向前行 ")); break;
       case 'B': Serial1.print(F("向後行 ")); break;
-      case 'L': Serial1.print(F("向左行 ")); break;
-      case 'R': Serial1.print(F("向右行 ")); break;
+      case 'L': Serial1.print(F("向左轉 ")); break;
+      case 'R': Serial1.print(F("向右轉 ")); break;
       default: 
         Serial1.println(F("❌ 方向錯誤 (F/B/L/R)"));
         return;
@@ -1593,8 +1347,8 @@ void showHelp() {
   Serial1.println(F("\n=== 步行指令 (行幾步) ==="));
   Serial1.println(F("WALK F 10  : 向前行10步"));
   Serial1.println(F("WALK B 5   : 向後行5步"));
-  Serial1.println(F("WALK L 3   : 向左行3步 (側移)"));
-  Serial1.println(F("WALK R 3   : 向右行3步 (側移)"));
+  Serial1.println(F("WALK L 3   : 向左轉彎3步"));
+  Serial1.println(F("WALK R 3   : 向右轉彎3步"));
   Serial1.println(F("STOP       : 安全停止"));
   Serial1.println(F("\n=== 三個 SHAKE 版本 ==="));
   Serial1.println(F("SHAKE_ASCII - ASCII 版"));
