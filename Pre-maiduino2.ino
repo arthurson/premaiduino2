@@ -183,12 +183,11 @@ public:
         
         hYaw = targetYaw;
         
-        // 修正：計算側擺(Roll)時，應使用相對橫向偏移(y)與垂直高度(-z)
-        // 修正原先錯誤使用了 hipWidth 導致 HV13/14 角度暴走
+        // 計算側擺(Roll)
         float lateralSide = isRight ? 1.0 : -1.0;
         hRoll = atan2(y * lateralSide, -z) * 180.0 / PI;
 
-        // 計算腿部實際伸展長度 (考慮 x, y, z 三維度)
+        // 計算腿部實際伸展長度
         float legLen = sqrt(x*x + y*y + z*z);
         if (legLen > (L1 + L2 - 0.5)) legLen = L1 + L2 - 0.5;
         
@@ -201,8 +200,9 @@ public:
         float beta = acos(constrain((L1*L1 + legLen*legLen - L2*L2) / (2 * L1 * legLen), -1.0, 1.0));
         hPitch = (alpha + beta) * 180.0 / PI;
 
-        // 腳踝前後 Pitch (保持與地面平行)
-        aPitch = kPitch - hPitch;
+        // 腳踝前後 Pitch：保持腳掌與地面平行
+        // 正確公式：腳踝角度 = -(髖角度 + 膝角度)
+        aPitch = -(hPitch + kPitch);
         
         // 腳踝側擺 Roll (抵銷髖關節)
         aRoll = -hRoll;
@@ -229,7 +229,7 @@ public:
     WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH, HIP_WIDTH), phase(0), walking(false), stepsRemaining(0) {
         walkF = walkB = turnL = turnR = false;
         lastUpdate = lastServoSend = 0;
-        memset(&rX, 0, sizeof(rX)); // 初始化所有浮點數
+        memset(&rX, 0, sizeof(rX));
     }
 
     void setDirection(char dir) {
@@ -285,31 +285,33 @@ public:
             }
         }
 
-        // 軌跡參數
-        float sway = 15.0 * sin(phase * PI); // 重心轉移幅度
-        float liftH = 25.0; // 抬腿高度
-        float stride = 30.0; // 步幅 (稍微微調讓重心更穩)
-        float turn = 15.0;
-        // 修正：直接定義 Z 軸深度為從髖關節到腳踝的距離
-        float squatDepth = -(THIGH_LENGTH + SHIN_LENGTH) + 15.0; 
-
+        // ========== 修正：調整步行參數，確保在物理極限內 ==========
+        float sway = 12.0 * sin(phase * PI);  // 重心轉移幅度（降低避免側擺過大）
+        float liftH = 20.0;                   // 抬腿高度（降低避免膝蓋過度彎曲）
+        float stride = 22.0;                  // 步幅（降低避免超出範圍）
+        float turn = 12.0;                    // 轉彎幅度
+        // 修正：重心高度設為 -120mm（從髖關節到腳踝的距離）
+        // 65(大腿) + 65(小腿) = 130mm，扣掉些微彎曲 = 120mm
+        float squatDepth = -120.0;
+        
         float tR = phase;
-        float tL = (phase >= 1.0) ? phase - 1.0 : phase + 1.0;
+        float tL = fmod(phase + 1.0, 2.0);  // 改進：用 fmod 確保左右腳相差半週期
 
         auto calcLeg = [&](float t, float &tx, float &ty, float &tz, float &tyaw, bool isR) {
             float moveDir = (walkF ? 1.0 : (walkB ? -1.0 : 0.0));
             float turnDir = (turnL ? 1.0 : (turnR ? -1.0 : 0.0));
             
-            // 修正：ty 必須是「相對於髖關節」的橫向偏移
-            // 當重心向右(sway為正)，相對於身體，腳向左相對位移，所以 ty = -sway
+            // 橫向偏移：重心轉移時，腳向反方向移動
             ty = -sway;
             
             if (t < 1.0) {
+                // 支撐期：腳在地上
                 float smooth = cos(t * PI);
                 tx = moveDir * (stride / 2.0) * smooth;
                 tyaw = turnDir * (turn / 2.0) * smooth;
-                tz = squatDepth;
+                tz = squatDepth;  // 保持接觸地面
             } else {
+                // 擺動期：腳抬起
                 float swingT = t - 1.0;
                 float smooth = -cos(swingT * PI);
                 tx = moveDir * (stride / 2.0) * smooth;
@@ -321,24 +323,33 @@ public:
         calcLeg(tR, rX, rY, rZ, rYaw, true);
         calcLeg(tL, lX, lY, lZ, lYaw, false);
 
-        // 修正：這裡的 rZ, lZ 已經是從髖關節向下算的負數垂直距離，不需再加 ANKLE_HEIGHT
+        // 呼叫 IK 算式（返回角度）
         ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
         ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
 
-        // 映射到脈衝
-        p3 = 7780 + ry * PULSE_PER_DEG;
-        p5 = 7400 + rr * PULSE_PER_DEG;
-        p7 = 7500 - rp * PULSE_PER_DEG;
-        p9 = 7500 - rk * PULSE_PER_DEG;
-        p11 = 7500 + rap * PULSE_PER_DEG;
-        p13 = 7825 + rar * PULSE_PER_DEG;
+        // ========== 修正：脈衝映射算式（左右腳對稱修正） ==========
         
-        p4 = 7500 + ly * PULSE_PER_DEG;
-        p6 = 7600 - lr * PULSE_PER_DEG;
-        p8 = 7500 + lp * PULSE_PER_DEG;
-        p10 = 7500 + lk * PULSE_PER_DEG;
-        p12 = 7550 - lap * PULSE_PER_DEG;
-        p14 = 7450 - lar * PULSE_PER_DEG;
+        // --- 右腳 (Right Leg) ---
+        p3 = 7780 + ry * PULSE_PER_DEG;           // HV3: 髖轉向
+        p5 = 7400 + rr * PULSE_PER_DEG;           // HV5: 髖側擺
+        p7 = 7500 - rp * PULSE_PER_DEG;           // HV7: 髖前後（向前 = 脈衝減少）
+        p9 = 7500 - rk * PULSE_PER_DEG;           // HV9: 膝屈伸（彎曲 = 脈衝減少）
+        
+        // 腳踝前後修正：為保持腳掌與地面平行，腳踝需反方向補償
+        // 正確公式：aPitch = -(hPitch + kPitch)
+        // 所以 rap = rk - rp（因為 rk, rp 都是正角度）
+        p11 = 7500 - (rk - rp) * PULSE_PER_DEG;   // HV11: 腳踝前後
+        p13 = 7825 + rar * PULSE_PER_DEG;         // HV13: 腳踝側擺
+        
+        // --- 左腳 (Left Leg) ---
+        p4 = 7500 + ly * PULSE_PER_DEG;           // HV4: 髖轉向
+        p6 = 7600 - lr * PULSE_PER_DEG;           // HV6: 髖側擺（左腳方向相反）
+        p8 = 7500 + lp * PULSE_PER_DEG;           // HV8: 髖前後（左腳向前 = 脈衝增加）
+        p10 = 7500 + lk * PULSE_PER_DEG;          // HV10: 膝屈伸（彎曲 = 脈衝增加）
+        
+        // 腳踝前後修正：左腳方向與右腳相反
+        p12 = 7550 + (lk - lp) * PULSE_PER_DEG;   // HV12: 腳踝前後
+        p14 = 7450 - lar * PULSE_PER_DEG;         // HV14: 腳踝側擺
 
         if (now - lastServoSend >= 20) {
             sendAngles();
@@ -360,7 +371,7 @@ public:
             delay(2);
         }
         
-        // 安全約束
+        // 安全約束（使用伺服定義的範圍）
         uint16_t s3  = constrain((uint16_t)round(p3),  6530, 9030);
         uint16_t s5  = constrain((uint16_t)round(p5),  6700, 8300);
         uint16_t s7  = constrain((uint16_t)round(p7),  4700, 10200);
@@ -375,22 +386,44 @@ public:
         uint16_t s12 = constrain((uint16_t)round(p12), 6750, 9350);
         uint16_t s14 = constrain((uint16_t)round(p14), 6200, 8450);
         
-        // Debug 輸出（用獨立 timer）
+        // Debug 輸出（用獨立 timer，每 200ms 輸出一次）
         if (millis() - lastDebugTime >= 200) {
             lastDebugTime = millis();
             Serial1.print(F("PHASE:")); Serial1.print(phase);
-            Serial1.print(F(" | R_Hip(P7):")); Serial1.print(s7);
-            Serial1.print(F(" | R_Knee(P9):")); Serial1.print(s9);
-            Serial1.print(F(" | L_Hip(P8):")); Serial1.print(s8);
-            Serial1.print(F(" | L_Knee(P10):")); Serial1.println(s10);
+            
+            // 右腿數據 (HV 3, 5, 7, 9, 11, 13)
+            Serial1.print(F(" | R:")); 
+            Serial1.print(s3);  Serial1.print(F(","));
+            Serial1.print(s5);  Serial1.print(F(","));
+            Serial1.print(s7);  Serial1.print(F(","));
+            Serial1.print(s9);  Serial1.print(F(","));
+            Serial1.print(s11); Serial1.print(F(","));
+            Serial1.print(s13);
+
+            // 左腿數據 (HV 4, 6, 8, 10, 12, 14)
+            Serial1.print(F(" | L:")); 
+            Serial1.print(s4);  Serial1.print(F(","));
+            Serial1.print(s6);  Serial1.print(F(","));
+            Serial1.print(s8);  Serial1.print(F(","));
+            Serial1.print(s10); Serial1.print(F(","));
+            Serial1.print(s12); Serial1.print(F(","));
+            Serial1.print(s14);
+            
+            Serial1.println(); // 換行
         }
         
         // 發送指令
         icsHV.setPos(3, s3);
-        icsHV.setPos(5, s5);   icsHV.setPos(7, s7);
-        icsHV.setPos(9, s9);   icsHV.setPos(11, s11); icsHV.setPos(13, s13);
-        icsHV.setPos(4, s4);   icsHV.setPos(6, s6);   icsHV.setPos(8, s8);
-        icsHV.setPos(10, s10); icsHV.setPos(12, s12);
+        icsHV.setPos(5, s5);   
+        icsHV.setPos(7, s7);
+        icsHV.setPos(9, s9);   
+        icsHV.setPos(11, s11); 
+        icsHV.setPos(13, s13);
+        icsHV.setPos(4, s4);   
+        icsHV.setPos(6, s6);   
+        icsHV.setPos(8, s8);
+        icsHV.setPos(10, s10); 
+        icsHV.setPos(12, s12);
         icsHV.setPos(14, s14);
     }
 };
