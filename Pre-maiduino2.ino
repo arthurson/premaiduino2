@@ -1,6 +1,6 @@
 /*
  * Pre-maiduino2_REWRITTEN_IK_FIXED.ino
- * 只更換 IK 核心邏輯，加入安全約束 + Debug，其餘功能原封不動
+ * 修正了：腳踝反向問題、行路唔夠力問題、以及「一格格」窒步問題
  */
 
 #include <Arduino.h>
@@ -201,8 +201,8 @@ public:
         hPitch = (alpha + beta) * 180.0 / PI;
 
         // 腳踝前後 Pitch：保持腳掌與地面平行
-        // 正確公式：腳踝角度 = -(髖角度 + 膝角度)
-        aPitch = -(hPitch + kPitch);
+        // 幾何抵消
+        aPitch = kPitch - hPitch;
         
         // 腳踝側擺 Roll (抵銷髖關節)
         aRoll = -hRoll;
@@ -286,12 +286,11 @@ public:
         }
 
         // ========== 修正：調整步行參數，確保在物理極限內 ==========
-        float sway = 12.0 * sin(phase * PI);  // 重心轉移幅度（降低避免側擺過大）
-        float liftH = 20.0;                   // 抬腿高度（降低避免膝蓋過度彎曲）
-        float stride = 22.0;                  // 步幅（降低避免超出範圍）
-        float turn = 12.0;                    // 轉彎幅度
+        float sway = 14.0 * sin(phase * PI);   // 稍微加大重心擺動(從10或12加到14)
+        float liftH = 22.0;                    
+        float stride = 20.0;                   // 稍微縮小步幅(從25減到20)，先求穩
+        float turn = 12.0;                     // 轉彎幅度
         // 修正：重心高度設為 -120mm（從髖關節到腳踝的距離）
-        // 65(大腿) + 65(小腿) = 130mm，扣掉些微彎曲 = 120mm
         float squatDepth = -120.0;
         
         float tR = phase;
@@ -327,29 +326,29 @@ public:
         ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
         ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
 
-        // ========== 修正：脈衝映射算式（左右腳對稱修正） ==========
+        // 抬腿時，腳尖微向上勾 5 度，防止撞地
+        if (rZ > squatDepth + 1.0) rap += 5.0;
+        if (lZ > squatDepth + 1.0) lap += 5.0;
+
+        // ========== 絕對物理映射 (根據原始 Log 校對) ==========
         
         // --- 右腳 (Right Leg) ---
-        p3 = 7780 + ry * PULSE_PER_DEG;           // HV3: 髖轉向
-        p5 = 7400 + rr * PULSE_PER_DEG;           // HV5: 髖側擺
-        p7 = 7500 - rp * PULSE_PER_DEG;           // HV7: 髖前後（向前 = 脈衝減少）
-        p9 = 7500 - rk * PULSE_PER_DEG;           // HV9: 膝屈伸（彎曲 = 脈衝減少）
-        
-        // 腳踝前後修正：為保持腳掌與地面平行，腳踝需反方向補償
-        // 正確公式：aPitch = -(hPitch + kPitch)
-        // 所以 rap = rk - rp（因為 rk, rp 都是正角度）
-        p11 = 7500 - (rk - rp) * PULSE_PER_DEG;   // HV11: 腳踝前後
-        p13 = 7825 + rar * PULSE_PER_DEG;         // HV13: 腳踝側擺
+        p3  = 7780 + ry * PULSE_PER_DEG;    
+        p5  = 7400 + rr * PULSE_PER_DEG;    
+        p7  = 7500 - rp * PULSE_PER_DEG;    // 減號：向前彎
+        p9  = 7500 - rk * PULSE_PER_DEG;    // 減號：向後折
+        // 修正：右腳踝加上 0.9 增益系數，防止補償過頭
+        p11 = 7500 - (rap * 0.9) * PULSE_PER_DEG;  
+        p13 = 7825 + rar * PULSE_PER_DEG;  
         
         // --- 左腳 (Left Leg) ---
-        p4 = 7500 + ly * PULSE_PER_DEG;           // HV4: 髖轉向
-        p6 = 7600 - lr * PULSE_PER_DEG;           // HV6: 髖側擺（左腳方向相反）
-        p8 = 7500 + lp * PULSE_PER_DEG;           // HV8: 髖前後（左腳向前 = 脈衝增加）
-        p10 = 7500 + lk * PULSE_PER_DEG;          // HV10: 膝屈伸（彎曲 = 脈衝增加）
-        
-        // 腳踝前後修正：左腳方向與右腳相反
-        p12 = 7550 + (lk - lp) * PULSE_PER_DEG;   // HV12: 腳踝前後
-        p14 = 7450 - lar * PULSE_PER_DEG;         // HV14: 腳踝側擺
+        p4  = 7500 + ly * PULSE_PER_DEG;    
+        p6  = 7600 - lr * PULSE_PER_DEG;    // 鏡像反向
+        p8  = 7500 + lp * PULSE_PER_DEG;    // 加號：向前彎
+        p10 = 7500 + lk * PULSE_PER_DEG;    // 加號：向後折
+        // 修正：左腳踝加上 0.9 增益系數，防止補償過頭
+        p12 = 7550 + (lap * 0.9) * PULSE_PER_DEG;  
+        p14 = 7450 - lar * PULSE_PER_DEG;   // 鏡像反向
 
         if (now - lastServoSend >= 20) {
             sendAngles();
@@ -1284,120 +1283,108 @@ void processCommand(String cmd) {
     showHelp();
   }
   else if (cmd == "G") {
-    if (mpuData.calibrated) {
-      if (readMPU6050()) {
-        Serial1.print(F("加速度: X="));
-        Serial1.print(mpuData.ax);
-        Serial1.print(F(" Y=")); Serial1.print(mpuData.ay);
-        Serial1.print(F(" Z=")); Serial1.println(mpuData.az);
-        
-        Serial1.print(F("陀螺儀: X=")); Serial1.print(mpuData.gx);
-        Serial1.print(F(" Y=")); Serial1.print(mpuData.gy);
-        Serial1.print(F(" Z=")); Serial1.println(mpuData.gz);
-        
-        Serial1.print(F("溫度: ")); Serial1.println(mpuData.temperature);
+      if (mpuData.calibrated) {
+        if (readMPU6050()) {
+          Serial1.print(F("加速度: X="));
+          Serial1.print(mpuData.ax);
+          Serial1.print(F(" Y=")); Serial1.print(mpuData.ay);
+          Serial1.print(F(" Z=")); Serial1.println(mpuData.az);
+          
+          Serial1.print(F("陀螺儀: X=")); Serial1.print(mpuData.gx);
+          Serial1.print(F(" Y=")); Serial1.print(mpuData.gy);
+          Serial1.print(F(" Z=")); Serial1.println(mpuData.gz);
+          
+          Serial1.print(F("溫度: ")); Serial1.println(mpuData.temperature);
+        }
       } else {
-        Serial1.println(F("讀取失敗"));
+        Serial1.println(F("❌ 陀螺儀未校準，請輸入 CALIBRATE"));
       }
-    } else {
-      Serial1.println(F("請先校準陀螺儀 (CALIBRATE)"));
-    }
   }
   else if (cmd == "VOLTAGE") {
-    float voltage = readBatteryVoltage();
-    Serial1.print(F("🔋 當前電壓: "));
-    Serial1.print(voltage);
-    Serial1.println(F("V"));
-    Serial1.print(F("📊 記錄範圍: "));
-    Serial1.print(voltageData.minVoltage);
-    Serial1.print(F("V - "));
-    Serial1.print(voltageData.maxVoltage);
-    Serial1.println(F("V"));
+      Serial1.print(F("🔋 當前電壓: "));
+      Serial1.print(voltageData.currentVoltage);
+      Serial1.println(F("V"));
   }
   else if (cmd == "CALIBRATE") {
-    calibrateGyro();
+      calibrateGyro();
   }
   else if (cmd == "HOME") {
-    moveAllServosToHome();
+      walkGen.safeStop(); // 確保停止步行狀態
+      moveAllServosToHome();
   }
   else if (cmd == "FREE ALL") {
-    processFreeCommand("FREE ALL");
-  }
-  else if (cmd == "SHAKE_ASCII") {
-    actionShakeBox_ASCII();
-  }
-  else if (cmd == "SHAKE_CPP") {
-    actionShakeBox_CPP();
-  }
-  else if (cmd == "SHAKE_ICS") {
-    actionShakeBox_ICS();
-  }
-  else if (cmd == "STOP") {
-    walkGen.safeStop();
+      walkGen.safeStop(); 
+      processFreeCommand("FREE ALL");
   }
   else if (cmd.startsWith("WALK ")) {
-    String params = cmd.substring(5);
-    params.trim();
-    
-    char dir = params.charAt(0);
-    int steps = params.substring(2).toInt();
-    
-    if (steps < 1) steps = 1;
-    if (steps > 100) steps = 100;
-    
-    walkGen.setDirection(dir);
-    
-    switch(dir) {
-      case 'F': Serial1.print(F("向前行 ")); break;
-      case 'B': Serial1.print(F("向後行 ")); break;
-      case 'L': Serial1.print(F("向左轉 ")); break;
-      case 'R': Serial1.print(F("向右轉 ")); break;
-      default: 
-        Serial1.println(F("❌ 方向錯誤 (F/B/L/R)"));
-        return;
-    }
-    
-    Serial1.print(steps);
-    Serial1.println(F(" 步"));
-    
-    walkGen.walkSteps(steps);
-    
-    Serial1.println(F("✅ 步行指令已接收"));
+      String params = cmd.substring(5);
+      params.trim();
+      
+      char dir = params.charAt(0);
+      int steps = params.substring(2).toInt();
+      
+      if (steps < 1) steps = 1;
+      if (steps > 100) steps = 100;
+      
+      walkGen.setDirection(dir);
+      
+      switch(dir) {
+          case 'F': Serial1.print(F("向前行 ")); break;
+          case 'B': Serial1.print(F("向後行 ")); break;
+          case 'L': Serial1.print(F("向左轉 ")); break;
+          case 'R': Serial1.print(F("向右轉 ")); break;
+          default: 
+              Serial1.println(F("❌ 方向錯誤 (F/B/L/R)"));
+              return;
+      }
+      
+      Serial1.print(steps);
+      Serial1.println(F(" 步"));
+      
+      walkGen.walkSteps(steps);
+      
+      Serial1.println(F("✅ 步行指令已接收"));
+  }
+  else if (cmd == "STOP") {
+      walkGen.safeStop();
+  }
+  else if (cmd == "SHAKE_ASCII") {
+      actionShakeBox_ASCII();
+  }
+  else if (cmd == "SHAKE_CPP") {
+      actionShakeBox_CPP();
+  }
+  else if (cmd == "SHAKE_ICS") {
+      actionShakeBox_ICS();
   }
   else {
-    Serial1.println(F("未知命令，輸入 H 查看說明"));
+      // 嘗試作為標準 ASCII 指令處理
+      if (!processASCIICommand(cmd)) {
+          Serial1.println(F("❓ 未知命令，輸入 H 查看說明"));
+      }
   }
 }
 
+// ===== 顯示幫助選單 =====
 void showHelp() {
   Serial1.println(F("\n=== 命令列表 ==="));
-  Serial1.println(F("H, HELP, ? : 顯示說明"));
-  Serial1.println(F("G          : 顯示陀螺儀數據"));
-  Serial1.println(F("VOLTAGE    : 顯示當前電壓"));
-  Serial1.println(F("CALIBRATE  : 校準陀螺儀"));
-  Serial1.println(F("HOME       : 全部回家"));
-  Serial1.println(F("FREE ALL   : 全部脫力"));
-  Serial1.println(F("\n=== 步行指令 (行幾步) ==="));
-  Serial1.println(F("WALK F 10  : 向前行10步"));
-  Serial1.println(F("WALK B 5   : 向後行5步"));
-  Serial1.println(F("WALK L 3   : 向左轉彎3步"));
-  Serial1.println(F("WALK R 3   : 向右轉彎3步"));
-  Serial1.println(F("STOP       : 安全停止"));
-  Serial1.println(F("\n=== 三個 SHAKE 版本 ==="));
-  Serial1.println(F("SHAKE_ASCII - ASCII 版"));
-  Serial1.println(F("SHAKE_CPP   - C++ 版"));
-  Serial1.println(F("SHAKE_ICS   - ICS 二進制版 (官方協議)"));
-  Serial1.println(F("\n=== 伺服控制 ==="));
-  Serial1.println(F("S MV 21 7500 64  (MV1 - 頭部前後)"));
-  Serial1.println(F("S MV 22 7500 64  (MV2 - 頭部轉向)"));
-  Serial1.println(F("S MV 23 7500 64  (MV3 - 頭部側傾)"));
-  Serial1.println(F("S HV 1 10200 64  (HV1 - 右肩前後)"));
-  Serial1.println(F("S HV 2 4700 64   (HV2 - 左肩前後)"));
-  Serial1.println(F("S MULTI 30 2 HV1 10200 HV2 4700"));
-  Serial1.println(F("FREE MV 21"));
-  Serial1.println(F("? HV 1"));
-  Serial1.println(F("\n=== 官方 Binary 協議 ==="));
-  Serial1.println(F("直接發送 3-byte 指令即可"));
-  Serial1.println(F("範例: 0x83 0x3A 0x4C = HV3 到 7500"));
-  Serial1.println(F("==================="));
+  Serial1.println(F("H, HELP, ? : 顯示此說明"));
+  Serial1.println(F("G          : 顯示陀螺儀與加速度數據"));
+  Serial1.println(F("VOLTAGE    : 顯示當前電池電壓"));
+  Serial1.println(F("CALIBRATE  : 重新校準陀螺儀"));
+  Serial1.println(F("HOME       : 所有伺服機回到初始位置"));
+  Serial1.println(F("FREE ALL   : 所有伺服機脫力 (關閉扭力)"));
+  Serial1.println(F("\n=== 步行與動作指令 ==="));
+  Serial1.println(F("WALK F [步數] : 向前行指定步數 (例如: WALK F 10)"));
+  Serial1.println(F("WALK B [步數] : 向後行指定步數"));
+  Serial1.println(F("WALK L [步數] : 向左轉彎指定步數"));
+  Serial1.println(F("WALK R [步數] : 向右轉彎指定步數"));
+  Serial1.println(F("STOP          : 立即安全停止當前動作並回到 Home Point"));
+  Serial1.println(F("SHAKE_ASCII   : 執行 Shake Box (ASCII 指令版)"));
+  Serial1.println(F("SHAKE_CPP     : 執行 Shake Box (C++ 函式版)"));
+  Serial1.println(F("SHAKE_ICS     : 執行 Shake Box (ICS 二進制版)"));
+  Serial1.println(F("\n=== 單軸/多軸微調 (ASCII) ==="));
+  Serial1.println(F("S [群組] [ID] [角度] [速度] : 設定單一伺服 (例: S HV 1 8000 64)"));
+  Serial1.println(F("S MULTI [速度] [數量] [群組ID 角度 ...] : 多軸同步 (例: S MULTI 64 2 HV1 8000 HV2 7000)"));
+  Serial1.println(F("? [群組] [ID] : 查詢伺服當前位置 (例: ? HV 1)"));
 }
