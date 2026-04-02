@@ -1,6 +1,7 @@
 /*
  * Pre-maiduino2_REWRITTEN_IK_FIXED.ino
  * 修正了：腳踝反向問題、行路唔夠力問題、以及「一格格」窒步問題
+ * 新增：即時 IK 調試功能 + 改良版 IK Solver + 進階測試功能
  */
 
 #include <Arduino.h>
@@ -167,49 +168,120 @@ void actionShakeBox_ICS();
 #define PULSE_PER_DEG   29.6296  // (11500-3500)/270
 
 // =========================================================
-// ↓↓↓ 重新編寫的核心 IK Solver (支援前後左右轉) ↓↓↓
+// ↓↓↓ 重新編寫的核心 IK Solver (改良版) ↓↓↓
 // =========================================================
 
 class IKSolver3D {
 private:
-    float L1, L2, hipWidth;
+    float L1, L2; // 移除了未被使用的 hipWidth 變數
 
 public:
-    IKSolver3D(float thigh, float shin, float width) : L1(thigh), L2(shin), hipWidth(width) {}
+    // 建構子：只需傳入大腿和小腿長度
+    IKSolver3D(float thigh, float shin) : L1(thigh), L2(shin) {}
 
     bool solve(float x, float y, float z, float targetYaw,
                float &hYaw, float &hRoll, float &hPitch, 
                float &kPitch, float &aPitch, float &aRoll, bool isRight) {
         
         hYaw = targetYaw;
-        
-        // 計算側擺(Roll)
+
+        // 計算側擺 (Roll)
         float lateralSide = isRight ? 1.0 : -1.0;
-        hRoll = atan2(y * lateralSide, -z) * 180.0 / PI;
+        // 優化：使用 Arduino 內建的 RAD_TO_DEG 替換 180.0 / PI
+        hRoll = atan2(y * lateralSide, -z) * RAD_TO_DEG;
 
-        // 計算腿部實際伸展長度
-        float legLen = sqrt(x*x + y*y + z*z);
-        if (legLen > (L1 + L2 - 0.5)) legLen = L1 + L2 - 0.5;
+        // 計算腿部實際伸展長度的「平方和」(節省重複計算)
+        float legLenSq = x*x + y*y + z*z;
+        float legLen = sqrt(legLenSq);
+
+        // 限制最大伸展長度，避免超出機械極限 (防止微軟體崩潰)
+        float maxLen = L1 + L2 - 0.5;
+        if (legLen > maxLen) {
+            legLen = maxLen;
+            legLenSq = legLen * legLen; // 同步更新平方值
+        }
+
+        // 膝蓋屈伸 (利用餘弦定理)
+        // 優化：直接使用 legLenSq，減少開根號又平方的運算耗損
+        float cosK = (legLenSq - L1*L1 - L2*L2) / (2 * L1 * L2);
+        kPitch = acos(constrain(cosK, -1.0, 1.0)) * RAD_TO_DEG;
+
+        // 髖關節前後 Pitch (幾何投影修正)
+        // 修正：當腿向外展(y不為0)時，從側面看的有效Z深度會變大
+        float effectiveZ = sqrt(y*y + z*z); 
+        float alpha = atan2(x, effectiveZ); 
         
-        // 膝蓋屈伸 (餘弦定理)
-        float cosK = (legLen*legLen - L1*L1 - L2*L2) / (2 * L1 * L2);
-        kPitch = acos(constrain(cosK, -1.0, 1.0)) * 180.0 / PI;
+        float cosBeta = (L1*L1 + legLenSq - L2*L2) / (2 * L1 * legLen);
+        float beta = acos(constrain(cosBeta, -1.0, 1.0));
+        
+        hPitch = (alpha + beta) * RAD_TO_DEG;
 
-        // 髖關節前後 Pitch
-        float alpha = atan2(x, -z);
-        float beta = acos(constrain((L1*L1 + legLen*legLen - L2*L2) / (2 * L1 * legLen), -1.0, 1.0));
-        hPitch = (alpha + beta) * 180.0 / PI;
-
-        // 腳踝前後 Pitch：保持腳掌與地面平行
-        // 幾何抵消
+        // 腳踝前後 Pitch：抵銷膝蓋與髖部角度，保持腳掌與地面平行
         aPitch = kPitch - hPitch;
-        
-        // 腳踝側擺 Roll (抵銷髖關節)
+
+        // 腳踝側擺 Roll：抵銷髖關節側擺，保持腳掌貼地
         aRoll = -hRoll;
         
         return true;
     }
+    
+    // =========================================================
+    // ↓↓↓ 改良版的即時 IK 測試函數 ↓↓↓
+    // =========================================================
+    void testSolver(float x, float y, float z, float yaw, bool isRight, bool plotMode = false) {
+        float hYaw, hRoll, hPitch, kPitch, aPitch, aRoll;
+        
+        // 呼叫我們剛剛改良過的 solve 函數
+        bool isValid = solve(x, y, z, yaw, hYaw, hRoll, hPitch, kPitch, aPitch, aRoll, isRight);
+        
+        // 1. 安全檢查：確保 IK 有成功算出結果，且沒有超出極限
+        if (!isValid) {
+            Serial1.println("警告：超出 IK 運算範圍！指令已忽略。");
+            return; // 立即中止，保護硬體
+        }
+
+        // 2. 輸出模式選擇
+        if (plotMode) {
+            // 繪圖模式：專門給 Arduino Serial Plotter 使用
+            // 格式：數值1,數值2,數值3... (不加多餘文字)
+            Serial1.print(hYaw);   Serial1.print(",");
+            Serial1.print(hRoll);  Serial1.print(",");
+            Serial1.print(hPitch); Serial1.print(",");
+            Serial1.print(kPitch); Serial1.print(",");
+            Serial1.print(aPitch); Serial1.print(",");
+            Serial1.println(aRoll); 
+        } else {
+            // 文字除錯模式：整理得更乾淨易讀
+            Serial1.print(F("[IK即時測試] "));
+            Serial1.print(isRight ? F("右腳") : F("左腳"));
+            Serial1.print(F(" | 座標("));
+            Serial1.print(x); Serial1.print(F(","));
+            Serial1.print(y); Serial1.print(F(","));
+            Serial1.print(z); 
+            Serial1.print(F(") -> 角度: 髖Y=")); Serial1.print(hYaw);
+            Serial1.print(F(", 髖R=")); Serial1.print(hRoll);
+            Serial1.print(F(", 髖P=")); Serial1.print(hPitch);
+            Serial1.print(F(", 膝=")); Serial1.print(kPitch);
+            Serial1.print(F(", 踝P=")); Serial1.print(aPitch);
+            Serial1.print(F(", 踝R=")); Serial1.println(aRoll);
+        }
+
+        // 3. 預留實體聯動 (需配合你專案中的 ICS 函數使用)
+        // 如果想即時看到硬體動起來，可以在這裡加入馬達驅動指令
+        /*
+        if (isRight) {
+             // 假設你要把角度轉回 ICS 數值並傳送
+             // setServoAngle(RIGHT_HIP_PITCH_ID, hPitch);
+             // setServoAngle(RIGHT_KNEE_ID, kPitch);
+             // ...
+        }
+        */
+    }
 };
+
+// =========================================================
+// WalkGenerator 類別 (使用改良版 IK Solver)
+// =========================================================
 
 class WalkGenerator {
 private:
@@ -224,9 +296,29 @@ private:
     float rX, rY, rZ, rYaw, lX, lY, lZ, lYaw;
     float ry, rr, rp, rk, rap, rar, ly, lr, lp, lk, lap, lar;
     float p3, p5, p7, p9, p11, p13, p4, p6, p8, p10, p12, p14;
+    
+    // 可即時調整的 IK 參數
+    float swayAmount = 14.0;
+    float strideAmount = 20.0;
+    float liftAmount = 22.0;
+    float turnAmount = 12.0;
+    float walkSpeed = 1.5;
+    float squatDepth = -120.0;
+    float ankleGain = 0.9;
+    float hipPitchGain = 1.0;
+    float hipRollGain = 1.0;
+    float kneeGain = 1.0;
+    float anklePitchGain = 1.0;
+    float ankleRollGain = 1.0;
+    
+    // 調試模式開關
+    bool ikDebugMode = false;
+    bool walkDebugMode = false;
+    int ikVersion = 1;
 
 public:
-    WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH, HIP_WIDTH), phase(0), walking(false), stepsRemaining(0) {
+    // 修改建構子：移除了 HIP_WIDTH 參數
+    WalkGenerator() : ikSolver(THIGH_LENGTH, SHIN_LENGTH), phase(0), walking(false), stepsRemaining(0) {
         walkF = walkB = turnL = turnR = false;
         lastUpdate = lastServoSend = 0;
         memset(&rX, 0, sizeof(rX));
@@ -261,6 +353,109 @@ public:
     
     bool isWalking() { return walking; }
     
+    // 即時參數調整方法
+    void setParam(String name, float value) {
+        if (name == "SWAY") {
+            swayAmount = constrain(value, 5, 35);
+            Serial1.print("✅ 重心擺幅 = "); Serial1.println(swayAmount);
+        }
+        else if (name == "STRIDE") {
+            strideAmount = constrain(value, 10, 45);
+            Serial1.print("✅ 步幅 = "); Serial1.println(strideAmount);
+        }
+        else if (name == "LIFT") {
+            liftAmount = constrain(value, 15, 45);
+            Serial1.print("✅ 抬腿高度 = "); Serial1.println(liftAmount);
+        }
+        else if (name == "TURN") {
+            turnAmount = constrain(value, 5, 30);
+            Serial1.print("✅ 轉彎幅度 = "); Serial1.println(turnAmount);
+        }
+        else if (name == "SPEED") {
+            walkSpeed = constrain(value, 0.8, 2.5);
+            Serial1.print("✅ 步行速度 = "); Serial1.println(walkSpeed);
+        }
+        else if (name == "SQUAT") {
+            squatDepth = constrain(value, -140, -100);
+            Serial1.print("✅ 蹲踞深度 = "); Serial1.println(squatDepth);
+        }
+        else if (name == "ANKLEGAIN") {
+            ankleGain = constrain(value, 0.5, 1.5);
+            Serial1.print("✅ 腳踝增益 = "); Serial1.println(ankleGain);
+        }
+        else if (name == "HIPPITCH") {
+            hipPitchGain = constrain(value, 0.7, 1.3);
+            Serial1.print("✅ 髖 Pitch 增益 = "); Serial1.println(hipPitchGain);
+        }
+        else if (name == "HIPROLL") {
+            hipRollGain = constrain(value, 0.7, 1.3);
+            Serial1.print("✅ 髖 Roll 增益 = "); Serial1.println(hipRollGain);
+        }
+        else if (name == "KNEE") {
+            kneeGain = constrain(value, 0.7, 1.3);
+            Serial1.print("✅ 膝蓋增益 = "); Serial1.println(kneeGain);
+        }
+        else if (name == "ANKLEPITCH") {
+            anklePitchGain = constrain(value, 0.5, 1.5);
+            Serial1.print("✅ 腳踝 Pitch 增益 = "); Serial1.println(anklePitchGain);
+        }
+        else if (name == "ANKLEROLL") {
+            ankleRollGain = constrain(value, 0.5, 1.5);
+            Serial1.print("✅ 腳踝 Roll 增益 = "); Serial1.println(ankleRollGain);
+        }
+        else {
+            Serial1.print("❌ 未知參數: "); Serial1.println(name);
+            Serial1.println("可用參數: SWAY, STRIDE, LIFT, TURN, SPEED, SQUAT, ANKLEGAIN, HIPPITCH, HIPROLL, KNEE, ANKLEPITCH, ANKLEROLL");
+        }
+    }
+    
+    void setIKVersion(int ver) {
+        ikVersion = constrain(ver, 1, 3);
+        Serial1.print("✅ 切換到 IK 版本 "); Serial1.println(ikVersion);
+        if (ikVersion == 1) Serial1.println("  版本1: 標準 IK");
+        else if (ikVersion == 2) Serial1.println("  版本2: 改良版 (+5% X, -2% Z)");
+        else if (ikVersion == 3) Serial1.println("  版本3: 實驗版 (+2% Z, 腳踝+20%)");
+    }
+    
+    void showParams() {
+        Serial1.println("\n╔════════════════════════════════════════╗");
+        Serial1.println("║       當前 IK 步行參數                  ║");
+        Serial1.println("╠════════════════════════════════════════╣");
+        Serial1.print  ("║ SWAY:     "); Serial1.print(swayAmount, 1); Serial1.println("                    ║");
+        Serial1.print  ("║ STRIDE:   "); Serial1.print(strideAmount, 1); Serial1.println("                    ║");
+        Serial1.print  ("║ LIFT:     "); Serial1.print(liftAmount, 1); Serial1.println("                    ║");
+        Serial1.print  ("║ TURN:     "); Serial1.print(turnAmount, 1); Serial1.println("                    ║");
+        Serial1.print  ("║ SPEED:    "); Serial1.print(walkSpeed, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ SQUAT:    "); Serial1.print(squatDepth, 1); Serial1.println("                    ║");
+        Serial1.print  ("║ ANKLEGAIN:"); Serial1.print(ankleGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ HIPPITCH: "); Serial1.print(hipPitchGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ HIPROLL:  "); Serial1.print(hipRollGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ KNEE:     "); Serial1.print(kneeGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ ANKLEPITCH:"); Serial1.print(anklePitchGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ ANKLEROLL: "); Serial1.print(ankleRollGain, 2); Serial1.println("                    ║");
+        Serial1.print  ("║ IK版本:   "); Serial1.print(ikVersion); 
+        if (ikVersion == 1) Serial1.println(" (標準)             ║");
+        else if (ikVersion == 2) Serial1.println(" (改良)             ║");
+        else Serial1.println(" (實驗)             ║");
+        Serial1.print  ("║ IK調試:   "); Serial1.print(ikDebugMode ? "開啟" : "關閉"); 
+        Serial1.println("                    ║");
+        Serial1.println("╚════════════════════════════════════════╝\n");
+    }
+    
+    void setDebugMode(String mode, bool enable) {
+        if (mode == "IK") {
+            ikDebugMode = enable;
+            Serial1.print("✅ IK 調試模式 "); Serial1.println(enable ? "開啟" : "關閉");
+        } else if (mode == "WALK") {
+            walkDebugMode = enable;
+            Serial1.print("✅ 步行調試模式 "); Serial1.println(enable ? "開啟" : "關閉");
+        }
+    }
+    
+    void testIK(float x, float y, float z, float yaw, bool isRight, bool plotMode = false) {
+        ikSolver.testSolver(x, y, z, yaw, isRight, plotMode);
+    }
+    
     void updateWalk() {
         if (!walking) return;
 
@@ -270,7 +465,7 @@ public:
 
         lastUpdate = now;
 
-        phase += (2.0 / 1.5) * dt;
+        phase += (2.0 / walkSpeed) * dt;
         
         if (phase >= 2.0) {
             phase -= 2.0;
@@ -285,32 +480,26 @@ public:
             }
         }
 
-        // ========== 修正：調整步行參數，確保在物理極限內 ==========
-        float sway = 14.0 * sin(phase * PI);   // 稍微加大重心擺動(從10或12加到14)
-        float liftH = 22.0;                    
-        float stride = 20.0;                   // 稍微縮小步幅(從25減到20)，先求穩
-        float turn = 12.0;                     // 轉彎幅度
-        // 修正：重心高度設為 -120mm（從髖關節到腳踝的距離）
-        float squatDepth = -120.0;
+        float sway = swayAmount * sin(phase * PI);
+        float liftH = liftAmount;
+        float stride = strideAmount;
+        float turn = turnAmount;
         
         float tR = phase;
-        float tL = fmod(phase + 1.0, 2.0);  // 改進：用 fmod 確保左右腳相差半週期
+        float tL = fmod(phase + 1.0, 2.0);
 
         auto calcLeg = [&](float t, float &tx, float &ty, float &tz, float &tyaw, bool isR) {
             float moveDir = (walkF ? 1.0 : (walkB ? -1.0 : 0.0));
             float turnDir = (turnL ? 1.0 : (turnR ? -1.0 : 0.0));
             
-            // 橫向偏移：重心轉移時，腳向反方向移動
             ty = -sway;
             
             if (t < 1.0) {
-                // 支撐期：腳在地上
                 float smooth = cos(t * PI);
                 tx = moveDir * (stride / 2.0) * smooth;
                 tyaw = turnDir * (turn / 2.0) * smooth;
-                tz = squatDepth;  // 保持接觸地面
+                tz = squatDepth;
             } else {
-                // 擺動期：腳抬起
                 float swingT = t - 1.0;
                 float smooth = -cos(swingT * PI);
                 tx = moveDir * (stride / 2.0) * smooth;
@@ -322,33 +511,70 @@ public:
         calcLeg(tR, rX, rY, rZ, rYaw, true);
         calcLeg(tL, lX, lY, lZ, lYaw, false);
 
-        // 呼叫 IK 算式（返回角度）
-        ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
-        ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
+        // IK 求解（支援版本切換）
+        switch(ikVersion) {
+            case 1:  // 標準版本
+                ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
+                ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
+                break;
+            case 2:  // 改良版：增加 X 方向行程，減少 Z 方向
+                ikSolver.solve(rX * 1.05, rY, rZ * 0.98, rYaw, ry, rr, rp, rk, rap, rar, true);
+                ikSolver.solve(lX * 1.05, lY, lZ * 0.98, lYaw, ly, lr, lp, lk, lap, lar, false);
+                break;
+            case 3:  // 實驗版：增加 Z 方向行程，增加腳踝角度
+                ikSolver.solve(rX, rY, rZ * 1.02, rYaw * 0.95, ry, rr, rp, rk, rap, rar, true);
+                ikSolver.solve(lX, lY, lZ * 1.02, lYaw * 0.95, ly, lr, lp, lk, lap, lar, false);
+                rap = rap * 1.2;
+                lap = lap * 1.2;
+                break;
+        }
 
-        // 抬腿時，腳尖微向上勾 5 度，防止撞地
+        // 應用增益
+        rp = rp * hipPitchGain;
+        rr = rr * hipRollGain;
+        rk = rk * kneeGain;
+        rap = rap * ankleGain * anklePitchGain;
+        rar = rar * ankleRollGain;
+        
+        lp = lp * hipPitchGain;
+        lr = lr * hipRollGain;
+        lk = lk * kneeGain;
+        lap = lap * ankleGain * anklePitchGain;
+        lar = lar * ankleRollGain;
+
+        // 抬腿時，腳尖微向上勾 5 度
         if (rZ > squatDepth + 1.0) rap += 5.0;
         if (lZ > squatDepth + 1.0) lap += 5.0;
 
-        // ========== 絕對物理映射 (根據原始 Log 校對) ==========
-        
-        // --- 右腳 (Right Leg) ---
+        // IK 調試輸出
+        if (ikDebugMode) {
+            static unsigned long lastIKDebug = 0;
+            if (millis() - lastIKDebug >= 200) {
+                lastIKDebug = millis();
+                Serial1.print("IK-DEBUG: Phase="); Serial1.print(phase, 2);
+                Serial1.print(" R: P="); Serial1.print(rp, 1);
+                Serial1.print(" K="); Serial1.print(rk, 1);
+                Serial1.print(" A="); Serial1.print(rap, 1);
+                Serial1.print(" L: P="); Serial1.print(lp, 1);
+                Serial1.print(" K="); Serial1.print(lk, 1);
+                Serial1.print(" A="); Serial1.println(lap, 1);
+            }
+        }
+
+        // 角度映射
         p3  = 7780 + ry * PULSE_PER_DEG;    
         p5  = 7400 + rr * PULSE_PER_DEG;    
-        p7  = 7500 - rp * PULSE_PER_DEG;    // 減號：向前彎
-        p9  = 7500 - rk * PULSE_PER_DEG;    // 減號：向後折
-        // 修正：右腳踝加上 0.9 增益系數，防止補償過頭
-        p11 = 7500 - (rap * 0.9) * PULSE_PER_DEG;  
+        p7  = 7500 - rp * PULSE_PER_DEG;    
+        p9  = 7500 - rk * PULSE_PER_DEG;    
+        p11 = 7500 - rap * PULSE_PER_DEG;  
         p13 = 7825 + rar * PULSE_PER_DEG;  
         
-        // --- 左腳 (Left Leg) ---
         p4  = 7500 + ly * PULSE_PER_DEG;    
-        p6  = 7600 - lr * PULSE_PER_DEG;    // 鏡像反向
-        p8  = 7500 + lp * PULSE_PER_DEG;    // 加號：向前彎
-        p10 = 7500 + lk * PULSE_PER_DEG;    // 加號：向後折
-        // 修正：左腳踝加上 0.9 增益系數，防止補償過頭
-        p12 = 7550 + (lap * 0.9) * PULSE_PER_DEG;  
-        p14 = 7450 - lar * PULSE_PER_DEG;   // 鏡像反向
+        p6  = 7600 - lr * PULSE_PER_DEG;    
+        p8  = 7500 + lp * PULSE_PER_DEG;    
+        p10 = 7500 + lk * PULSE_PER_DEG;    
+        p12 = 7550 + lap * PULSE_PER_DEG;  
+        p14 = 7450 - lar * PULSE_PER_DEG;   
 
         if (now - lastServoSend >= 20) {
             sendAngles();
@@ -360,7 +586,6 @@ public:
         static bool speedSet = false;
         static unsigned long lastDebugTime = 0;
         
-        // 設定速度（只做一次）
         if (!speedSet) {
             int legServos[] = {3,4,5,6,7,8,9,10,11,12,13,14};
             for (int i = 0; i < 12; i++) {
@@ -370,7 +595,6 @@ public:
             delay(2);
         }
         
-        // 安全約束（使用伺服定義的範圍）
         uint16_t s3  = constrain((uint16_t)round(p3),  6530, 9030);
         uint16_t s5  = constrain((uint16_t)round(p5),  6700, 8300);
         uint16_t s7  = constrain((uint16_t)round(p7),  4700, 10200);
@@ -385,33 +609,17 @@ public:
         uint16_t s12 = constrain((uint16_t)round(p12), 6750, 9350);
         uint16_t s14 = constrain((uint16_t)round(p14), 6200, 8450);
         
-        // Debug 輸出（用獨立 timer，每 200ms 輸出一次）
-        if (millis() - lastDebugTime >= 200) {
+        if (walkDebugMode && (millis() - lastDebugTime >= 100)) {
             lastDebugTime = millis();
-            Serial1.print(F("PHASE:")); Serial1.print(phase);
-            
-            // 右腿數據 (HV 3, 5, 7, 9, 11, 13)
-            Serial1.print(F(" | R:")); 
-            Serial1.print(s3);  Serial1.print(F(","));
-            Serial1.print(s5);  Serial1.print(F(","));
-            Serial1.print(s7);  Serial1.print(F(","));
-            Serial1.print(s9);  Serial1.print(F(","));
-            Serial1.print(s11); Serial1.print(F(","));
-            Serial1.print(s13);
-
-            // 左腿數據 (HV 4, 6, 8, 10, 12, 14)
-            Serial1.print(F(" | L:")); 
-            Serial1.print(s4);  Serial1.print(F(","));
-            Serial1.print(s6);  Serial1.print(F(","));
-            Serial1.print(s8);  Serial1.print(F(","));
-            Serial1.print(s10); Serial1.print(F(","));
-            Serial1.print(s12); Serial1.print(F(","));
-            Serial1.print(s14);
-            
-            Serial1.println(); // 換行
+            Serial1.print("WALK-DEBUG: Phase="); Serial1.print(phase, 2);
+            Serial1.print(" R7="); Serial1.print(s7);
+            Serial1.print(" R9="); Serial1.print(s9);
+            Serial1.print(" R11="); Serial1.print(s11);
+            Serial1.print(" L8="); Serial1.print(s8);
+            Serial1.print(" L10="); Serial1.print(s10);
+            Serial1.print(" L12="); Serial1.println(s12);
         }
         
-        // 發送指令
         icsHV.setPos(3, s3);
         icsHV.setPos(5, s5);   
         icsHV.setPos(7, s7);
@@ -1188,6 +1396,8 @@ void setup() {
   Serial1.println(F("  - IK 步行控制 (WALK 指令) - 只控制 HV3-14 (12軸下肢)"));
   Serial1.println(F("  - 更安全版 STOP (先落腳再返 home)"));
   Serial1.println(F("  - 電壓檢查 (低於9V紅燈)"));
+  Serial1.println(F("  - 即時 IK 調試功能 (IK 指令)"));
+  Serial1.println(F("  - 改良版 IK Solver (幾何投影修正)"));
   
   Serial1.println(F("\n🔢 binaryID: HV=1-14, MV=21-31"));
   Serial1.println(F("  注意: HV1-2 係肩 (步行時唔會郁)"));
@@ -1309,7 +1519,7 @@ void processCommand(String cmd) {
       calibrateGyro();
   }
   else if (cmd == "HOME") {
-      walkGen.safeStop(); // 確保停止步行狀態
+      walkGen.safeStop();
       moveAllServosToHome();
   }
   else if (cmd == "FREE ALL") {
@@ -1357,6 +1567,72 @@ void processCommand(String cmd) {
   else if (cmd == "SHAKE_ICS") {
       actionShakeBox_ICS();
   }
+  // ===== 新增：IK 調試命令 =====
+  else if (cmd.startsWith("IK ")) {
+      String params = cmd.substring(3);
+      params.trim();
+      
+      if (params == "PARAM" || params == "SHOW") {
+          walkGen.showParams();
+      }
+      else if (params.startsWith("SET ")) {
+          String setCmd = params.substring(4);
+          int spacePos = setCmd.indexOf(' ');
+          if (spacePos > 0) {
+              String paramName = setCmd.substring(0, spacePos);
+              float value = setCmd.substring(spacePos + 1).toFloat();
+              walkGen.setParam(paramName, value);
+          } else {
+              Serial1.println(F("用法: IK SET <參數> <數值>"));
+          }
+      }
+      else if (params.startsWith("VERSION ")) {
+          int ver = params.substring(8).toInt();
+          walkGen.setIKVersion(ver);
+      }
+      else if (params.startsWith("DEBUG ")) {
+          String debugCmd = params.substring(6);
+          int spacePos = debugCmd.indexOf(' ');
+          if (spacePos > 0) {
+              String mode = debugCmd.substring(0, spacePos);
+              bool enable = (debugCmd.substring(spacePos + 1) == "ON");
+              walkGen.setDebugMode(mode, enable);
+          } else {
+              bool enable = (debugCmd == "ON");
+              walkGen.setDebugMode("IK", enable);
+              walkGen.setDebugMode("WALK", enable);
+          }
+      }
+      else if (params.startsWith("TEST ")) {
+          // 支援兩種模式：
+          // IK TEST <x> <y> <z> <yaw> <R/L>           (文字模式)
+          // IK TEST PLOT <x> <y> <z> <yaw> <R/L>      (繪圖模式)
+          String testCmd = params.substring(5);
+          testCmd.trim();
+          
+          bool plotMode = false;
+          if (testCmd.startsWith("PLOT ")) {
+              plotMode = true;
+              testCmd = testCmd.substring(5);
+              testCmd.trim();
+          }
+          
+          float x, y, z, yaw;
+          char side;
+          int parsed = sscanf(testCmd.c_str(), "%f %f %f %f %c", &x, &y, &z, &yaw, &side);
+          if (parsed == 5) {
+              walkGen.testIK(x, y, z, yaw, (side == 'R' || side == 'r'), plotMode);
+          } else {
+              Serial1.println(F("用法: IK TEST <x> <y> <z> <yaw> <R/L>"));
+              Serial1.println(F("      IK TEST PLOT <x> <y> <z> <yaw> <R/L> (繪圖模式)"));
+              Serial1.println(F("範例: IK TEST 20 -15 -120 0 R"));
+              Serial1.println(F("      IK TEST PLOT 20 -15 -120 0 R"));
+          }
+      }
+      else {
+          Serial1.println(F("IK 子命令: PARAM, SET, VERSION, DEBUG, TEST"));
+      }
+  }
   else {
       // 嘗試作為標準 ASCII 指令處理
       if (!processASCIICommand(cmd)) {
@@ -1387,4 +1663,17 @@ void showHelp() {
   Serial1.println(F("S [群組] [ID] [角度] [速度] : 設定單一伺服 (例: S HV 1 8000 64)"));
   Serial1.println(F("S MULTI [速度] [數量] [群組ID 角度 ...] : 多軸同步 (例: S MULTI 64 2 HV1 8000 HV2 7000)"));
   Serial1.println(F("? [群組] [ID] : 查詢伺服當前位置 (例: ? HV 1)"));
+  Serial1.println(F("\n=== IK 即時調試指令 ==="));
+  Serial1.println(F("IK PARAM        : 顯示當前所有 IK 參數"));
+  Serial1.println(F("IK SET <參數> <值> : 調整 IK 參數"));
+  Serial1.println(F("  可用參數: SWAY, STRIDE, LIFT, TURN, SPEED, SQUAT,"));
+  Serial1.println(F("            ANKLEGAIN, HIPPITCH, HIPROLL, KNEE,"));
+  Serial1.println(F("            ANKLEPITCH, ANKLEROLL"));
+  Serial1.println(F("IK VERSION <1-3> : 切換 IK 版本 (1:標準 2:改良 3:實驗)"));
+  Serial1.println(F("IK DEBUG ON/OFF  : 開關 IK 調試輸出"));
+  Serial1.println(F("IK DEBUG <IK/WALK> ON/OFF : 開關特定調試模式"));
+  Serial1.println(F("IK TEST <x> <y> <z> <yaw> <R/L> : 測試 IK 求解器"));
+  Serial1.println(F("IK TEST PLOT <x> <y> <z> <yaw> <R/L> : 測試 IK (繪圖模式)"));
+  Serial1.println(F("  範例: IK TEST 20 -15 -120 0 R"));
+  Serial1.println(F("        IK TEST PLOT 20 -15 -120 0 R"));
 }
