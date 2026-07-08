@@ -17,4 +17,7 @@ it supports http controller.
 
 0.1b started by claude sonnet v5
 
+walking gait code by kazzlog
+https://github.com/kazzlog/pm_sample/tree/master/pm_sample
+
 it is a beta test, dont flash it, tons of bugs, it will damange your toy, no joke, the code is for reference only.
