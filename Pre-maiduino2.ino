@@ -1,16 +1,24 @@
-/*
- * Pre-maiduino2_REWRITTEN_IK_FIXED.ino
- * 修正了：腳踝反向問題、行路唔夠力問題、以及「一格格」窒步問題
- * 新增：即時 IK 調試功能 + 改良版 IK Solver + 進階測試功能
- * [新增] Self-Balancing：PID 平衡控制，HV11/12/13/14 每隻踝獨立符號控制
- */
+
+// STM32duino 嘅 HardwareSerial RX buffer 預設淨係 64 byte，但 Unity/PC
+// 端 continuousMode 送嘅 0x18 多軸角度封包（25隻servo全部）係 80 byte，
+// 單一個封包已經超過預設 buffer 容量！封包送到一半 buffer 爆滿，
+// 之後嘅 byte 會被硬件丟棄，令 parser 讀到殘缺封包，checksum 永遠
+// 對唔上——呢個先係 continuousMode 完全冇反應嘅根本原因。
+//
+// 注意：唔可以淨係喺呢個 .ino 度寫 #define SERIAL_RX_BUFFER_SIZE。
+// Arduino IDE 會將 .ino 轉做 .cpp 編譯，但 HardwareSerial.cpp（STM32
+// core 本身）係獨立編譯單元，唔會睇到呢度嘅 #define。要生效必須喺
+// 同一個 sketch 資料夾新增一個名叫 hal_conf_extra.h 嘅檔案，STM32
+// core 會自動 #include 佢去覆蓋核心庫嘅編譯設定。呢個 .ino 已經另外
+// 建立咗 hal_conf_extra.h，內容已經加大 buffer 到 256 byte。
 
 #include <Arduino.h>
-#include <Wire.h>
+#include <math.h>  // table_walk.c 需要 fabsf()
 
-// ===== 手動宣告 Serial2 同 Serial3 =====
-HardwareSerial Serial2(PA3, PA2);
-HardwareSerial Serial3(PB11, PB10);
+// PA3/PB11 為 NC，冇實體 RX 線，ICS bus 係單線半雙工，必須用
+// half-duplex 單 pin constructor（唔可以用普通雙 pin full-duplex）
+HardwareSerial Serial2(PA2);
+HardwareSerial Serial3(PB10);
 
 // ===== 引入官方 ICS 函式庫 =====
 #include <IcsHardSerialClass.h>
@@ -24,365 +32,23 @@ HardwareSerial Serial3(PB11, PB10);
 #define EN_HV_PIN PA4
 #define EN_MV_PIN PB2
 
-// ===== 電壓檢查相關定義 =====
-#define VOLTAGE_PIN PA0
-#define VOLTAGE_WARNING 9.0
-#define VOLTAGE_CHECK_INTERVAL 5000
-#define VOLTAGE_SAMPLES 10
-#define VOLTAGE_DIVIDER_RATIO 22.9
+#include "LEDControl.h"
+#include "VoltageMonitor.h"
+#include "MPU6050IMU.h"
 
 // ===== 建立兩個通訊物件 =====
-// [FIX 1] timeout 50ms → 1ms：消除因 servo 偶爾無回應引起嘅 bus 卡頓
 IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 1);
 IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 1);
 
 // ===== 速度定義 =====
-#define MIN_SPEED 1
-#define MAX_SPEED 127
-#define DEFAULT_SPEED 63
-
-// ===== LED 相關定義 =====
-#define LED_RED_PIN PA7
-#define LED_GREEN_PIN PB0
-#define LED_BLUE_PIN PB1
-
-// ===== 呼吸燈速度定義 =====
-#define BREATH_SPEED 4
-
-// ===== Batch Mode 設定 =====
-#define BATCH_BUFFER_SIZE 1024
-#define BATCH_TIMEOUT 300
-
-// ===== 平衡系統更新周期 =====
-#define BALANCE_UPDATE_MS 10
-
-// ===== MPU6050 相關定義 =====
-#define MPU6050_ADDR 0x68
-
-struct MPU6050Data {
-  float ax, ay, az;
-  float gx, gy, gz;
-  float temperature;
-  int16_t gyroXOffset, gyroYOffset, gyroZOffset;
-  bool calibrated;
-};
-
-MPU6050Data mpuData;
-
-// =========================================================
-// ↓↓↓ [新增] PID 控制器 + 平衡系統 ↓↓↓
-// =========================================================
-
-struct PIDController {
-  float Kp, Ki, Kd;
-  float integral;
-  float lastMeasurement;
-  float lastDTerm;  // 儲存上次 D 項供 debug 顯示
-  bool firstCall;   // 第一次呼叫跳過 D 項，避免 D:200+ 衝擊
-  float output;
-  float integralLimit;
-
-  void reset() {
-    integral = 0;
-    lastMeasurement = 0;
-    lastDTerm = 0;
-    firstCall = true;
-    output = 0;
-  }
-
-  void initMeasurement(float m) {
-    lastMeasurement = m;
-    lastDTerm = 0;
-    firstCall = false;
-  }
-
-  float compute(float error, float measurement, float dt, float outputLimit) {
-    float pTerm = Kp * error;
-    float dTerm = 0.0f;
-    if (!firstCall && dt > 0.0001f)
-      dTerm = -Kd * (measurement - lastMeasurement) / dt;
-    firstCall = false;
-    lastMeasurement = measurement;
-    lastDTerm = dTerm;
-    float pdOutput = pTerm + dTerm;
-    bool saturated = (pdOutput > outputLimit || pdOutput < -outputLimit);
-    bool sameDir = ((integral > 0 && error > 0) || (integral < 0 && error < 0));
-    if (!saturated || !sameDir) {
-      integral += error * dt;
-      integral = constrain(integral, -integralLimit, integralLimit);
-    }
-    output = pTerm + Ki * integral + dTerm;
-    return output;
-  }
-};
-
-struct PIDParamSet {
-  float Kp, Ki, Kd, integralLimit;
-};
-
-struct BalanceSystem {
-  PIDController pitchPID, rollPID;
-  bool enabled, walkingMode;
-  float targetPitch, targetRoll, currentPitch, currentRoll;
-  float pitchCompensation, rollCompensation;
-  float pitchFiltered, rollFiltered, compFilterAlpha;
-  float maxPitchComp, maxRollComp;
-  float pitchDeadzone, rollDeadzone;
-
-  // 每隻踝伺服獨立符號（+1 正常，-1 反轉）
-  // 命令：BALANCE HV11/12/13/14 INVERT
-  // 調八字方法：BALANCE DEBUG ON，推機器人側傾，
-  //   觀察 Roll PID 方向，哪隻踝方向錯就 INVERT 哪隻
-  int8_t hv11Sign;  // 右踝前後
-  int8_t hv12Sign;  // 左踝前後
-  int8_t hv13Sign;  // 右踝側擺
-  int8_t hv14Sign;  // 左踝側擺
-
-  // Rate Limiting：每 10ms 最多改變 maxRatePulse 個 pulse，消除「一格格」
-  float maxRatePulse;
-  int16_t lastRightPitchPulse, lastLeftPitchPulse;
-  int16_t lastRightRollPulse, lastLeftRollPulse;
-
-  PIDParamSet idlePitchParams, idleRollParams;
-  PIDParamSet walkPitchParams, walkRollParams;
-
-  bool debugEnabled;
-  unsigned long lastDebugTime, debugInterval;
-  unsigned long updateCount;
-  float maxPitchSeen, maxRollSeen;
-
-  void init() {
-    // 保守初始值，先從 Kp=0.3 開始調
-    idlePitchParams = { 0.6f, 0.05f, 0.15f, 5.0f };
-    idleRollParams = { 0.5f, 0.04f, 0.12f, 4.0f };
-    walkPitchParams = { 0.4f, 0.03f, 0.08f, 4.0f };
-    walkRollParams = { 0.3f, 0.02f, 0.06f, 3.0f };
-    enabled = false;
-    walkingMode = false;
-    targetPitch = 0;
-    targetRoll = 0;
-    currentPitch = 0;
-    currentRoll = 0;
-    pitchCompensation = 0;
-    rollCompensation = 0;
-    pitchFiltered = 0;
-    rollFiltered = 0;
-    compFilterAlpha = 0.98f;
-    maxPitchComp = 5.0f;
-    maxRollComp = 4.0f;
-    pitchDeadzone = 0.5f;
-    rollDeadzone = 0.5f;
-    hv11Sign = +1;
-    hv12Sign = -1;
-    hv13Sign = +1;
-    hv14Sign = -1;
-    maxRatePulse = 45.0f;
-    lastRightPitchPulse = 0;
-    lastLeftPitchPulse = 0;
-    lastRightRollPulse = 0;
-    lastLeftRollPulse = 0;
-    debugEnabled = false;
-    lastDebugTime = 0;
-    debugInterval = 200;
-    updateCount = 0;
-    maxPitchSeen = 0;
-    maxRollSeen = 0;
-    _loadModeParams();
-    pitchPID.reset();
-    rollPID.reset();
-  }
-
-  void _loadModeParams() {
-    const PIDParamSet &pp = walkingMode ? walkPitchParams : idlePitchParams;
-    const PIDParamSet &rp = walkingMode ? walkRollParams : idleRollParams;
-    pitchPID.Kp = pp.Kp;
-    pitchPID.Ki = pp.Ki;
-    pitchPID.Kd = pp.Kd;
-    pitchPID.integralLimit = pp.integralLimit;
-    rollPID.Kp = rp.Kp;
-    rollPID.Ki = rp.Ki;
-    rollPID.Kd = rp.Kd;
-    rollPID.integralLimit = rp.integralLimit;
-  }
-
-  void setWalkingMode(bool w) {
-    if (walkingMode == w) return;
-    walkingMode = w;
-    _loadModeParams();
-    pitchPID.integral = 0;
-    rollPID.integral = 0;
-    Serial1.print(F("⚙️  平衡模式 → "));
-    Serial1.println(w ? F("Walking") : F("Idle"));
-  }
-
-  void update(float ax, float ay, float az, float gyroP, float gyroR, float dt) {
-    if (!enabled) return;
-    float accelP = -atan2f(az, ay) * RAD_TO_DEG, accelR = atan2f(ax, ay) * RAD_TO_DEG;
-    // 行走時陀螺振動大，降低 alpha 避免漂移（靜止 0.98，行走 0.85）
-    // 同時限制濾波角度在合理範圍，防止陀螺積分到 240°+
-    float alpha = walkingMode ? min(compFilterAlpha, 0.85f) : compFilterAlpha;
-    pitchFiltered = alpha * (pitchFiltered + gyroP * dt) + (1.0f - alpha) * accelP;
-    rollFiltered = alpha * (rollFiltered + gyroR * dt) + (1.0f - alpha) * accelR;
-    // 限制在 ±60° 以內（超出即代表漂移，強制拉回）
-    pitchFiltered = constrain(pitchFiltered, -60.0f, 60.0f);
-    rollFiltered = constrain(rollFiltered, -60.0f, 60.0f);
-    currentPitch = pitchFiltered;
-    currentRoll = rollFiltered;
-    float pe = targetPitch - pitchFiltered, re = targetRoll - rollFiltered;
-    if (fabsf(pe) < pitchDeadzone) pe = 0;
-    if (fabsf(re) < rollDeadzone) re = 0;
-    if (pe == 0) pitchPID.integral *= 0.9f;
-    if (re == 0) rollPID.integral *= 0.9f;
-    if (dt > 0.0001f && dt < 0.5f) {
-      pitchCompensation = pitchPID.compute(pe, pitchFiltered, dt, maxPitchComp);
-      rollCompensation = rollPID.compute(re, rollFiltered, dt, maxRollComp);
-    }
-    pitchCompensation = constrain(pitchCompensation, -maxPitchComp, maxPitchComp);
-    rollCompensation = constrain(rollCompensation, -maxRollComp, maxRollComp);
-    updateCount++;
-    maxPitchSeen = max(maxPitchSeen, fabsf(currentPitch));
-    maxRollSeen = max(maxRollSeen, fabsf(currentRoll));
-    unsigned long now = millis();
-    if (debugEnabled && (now - lastDebugTime >= debugInterval)) {
-      printDebug();
-      lastDebugTime = now;
-    }
-  }
-
-  void printDebug() {
-    Serial1.println(F("\n=== Balance Debug ==="));
-    Serial1.print(F("模式:"));
-    Serial1.println(walkingMode ? F("Walking") : F("Idle"));
-    Serial1.print(F("濾波 P:"));
-    Serial1.print(pitchFiltered, 2);
-    Serial1.print(F("° R:"));
-    Serial1.print(rollFiltered, 2);
-    Serial1.println(F("°"));
-    Serial1.print(F("目標 P:"));
-    Serial1.print(targetPitch, 2);
-    Serial1.print(F("° R:"));
-    Serial1.print(targetRoll, 2);
-    Serial1.println(F("°"));
-    Serial1.print(F("輸出 P:"));
-    Serial1.print(pitchCompensation, 2);
-    Serial1.print(F("° R:"));
-    Serial1.print(rollCompensation, 2);
-    Serial1.println(F("°"));
-    // 成員函式內直接用欄位名，不加 balanceSystem. 前綴
-    Serial1.print(F("踝符號 11:"));
-    Serial1.print(hv11Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" 12:"));
-    Serial1.print(hv12Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" 13:"));
-    Serial1.print(hv13Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" 14:"));
-    Serial1.println(hv14Sign > 0 ? F("+1") : F("-1"));
-    float pe = targetPitch - pitchFiltered, re = targetRoll - rollFiltered;
-    Serial1.print(F("Pitch P:"));
-    Serial1.print(pitchPID.Kp * pe, 2);
-    Serial1.print(F(" I:"));
-    Serial1.print(pitchPID.Ki * pitchPID.integral, 2);
-    Serial1.print(F(" D:"));
-    Serial1.println(pitchPID.lastDTerm, 2);
-    Serial1.print(F("Roll  P:"));
-    Serial1.print(rollPID.Kp * re, 2);
-    Serial1.print(F(" I:"));
-    Serial1.print(rollPID.Ki * rollPID.integral, 2);
-    Serial1.print(F(" D:"));
-    Serial1.println(rollPID.lastDTerm, 2);
-    Serial1.print(F("cnt:"));
-    Serial1.print(updateCount);
-    Serial1.print(F(" maxP:"));
-    Serial1.print(maxPitchSeen, 2);
-    Serial1.print(F("° maxR:"));
-    Serial1.print(maxRollSeen, 2);
-    Serial1.println(F("°"));
-  }
-
-  void printStatus() {
-    Serial1.println(F("\n=== Balance 狀態 ==="));
-    Serial1.print(F("狀態:"));
-    Serial1.println(enabled ? F("✅ 啟用") : F("❌ 停用"));
-    Serial1.print(F("模式:"));
-    Serial1.println(walkingMode ? F("Walking") : F("Idle"));
-    Serial1.print(F("Pitch KpKiKd:"));
-    Serial1.print(pitchPID.Kp, 3);
-    Serial1.print(F("/"));
-    Serial1.print(pitchPID.Ki, 3);
-    Serial1.print(F("/"));
-    Serial1.println(pitchPID.Kd, 3);
-    Serial1.print(F("Roll  KpKiKd:"));
-    Serial1.print(rollPID.Kp, 3);
-    Serial1.print(F("/"));
-    Serial1.print(rollPID.Ki, 3);
-    Serial1.print(F("/"));
-    Serial1.println(rollPID.Kd, 3);
-    Serial1.print(F("Idle Pitch:"));
-    Serial1.print(idlePitchParams.Kp, 3);
-    Serial1.print(F("/"));
-    Serial1.print(idlePitchParams.Ki, 3);
-    Serial1.print(F("/"));
-    Serial1.println(idlePitchParams.Kd, 3);
-    Serial1.print(F("Walk Pitch:"));
-    Serial1.print(walkPitchParams.Kp, 3);
-    Serial1.print(F("/"));
-    Serial1.print(walkPitchParams.Ki, 3);
-    Serial1.print(F("/"));
-    Serial1.println(walkPitchParams.Kd, 3);
-    Serial1.print(F("alpha:"));
-    Serial1.print(compFilterAlpha, 3);
-    Serial1.print(F(" maxP:"));
-    Serial1.print(maxPitchComp, 1);
-    Serial1.print(F("° maxR:"));
-    Serial1.print(maxRollComp, 1);
-    Serial1.println(F("°"));
-    Serial1.print(F("死區 P:"));
-    Serial1.print(pitchDeadzone, 2);
-    Serial1.print(F("° R:"));
-    Serial1.print(rollDeadzone, 2);
-    Serial1.println(F("°"));
-    Serial1.print(F("踝符號 HV11:"));
-    Serial1.print(hv11Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" HV12:"));
-    Serial1.print(hv12Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" HV13:"));
-    Serial1.print(hv13Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F(" HV14:"));
-    Serial1.println(hv14Sign > 0 ? F("+1") : F("-1"));
-    Serial1.print(F("Rate:"));
-    Serial1.print(maxRatePulse, 0);
-    Serial1.print(F(" pulse Debug:"));
-    Serial1.println(debugEnabled ? F("ON") : F("OFF"));
-  }
-
-  void resetStats() {
-    updateCount = 0;
-    maxPitchSeen = 0;
-    maxRollSeen = 0;
-    lastRightPitchPulse = 0;
-    lastLeftPitchPulse = 0;
-    lastRightRollPulse = 0;
-    lastLeftRollPulse = 0;
-    pitchPID.reset();
-    rollPID.reset();
-    Serial1.println(F("✅ 平衡系統統計已重置"));
-  }
-};
-
-BalanceSystem balanceSystem;
-
-// ↑↑↑ 平衡系統結構體結束 ↑↑↑
-// =========================================================
-
-// ===== 電壓數據結構 =====
-struct VoltageData {
-  float currentVoltage;
-  float minVoltage;
-  float maxVoltage;
-  unsigned long lastCheckTime;
-  bool warningActive;
-  bool shutdownInitiated;
-} voltageData;
+#define DEFAULT_SPEED_HV 127  // HV 伺服速度 (原廠設定值)
+#define DEFAULT_SPEED_MV 100  // MV 伺服速度 (原廠設定值)
+#define DEFAULT_STRETCH_HV 60   // HV 伺服 Stretch 硬度 (原廠設定值)
+#define DEFAULT_STRETCH_MV 100  // MV 伺服 Stretch 硬度 (原廠設定值)
+#define DEFAULT_CUR_HV 20    // HV 伺服電流制限值 (原廠設定值)
+#define DEFAULT_CUR_MV 40    // MV 伺服電流制限值 (原廠設定值)
+#define DEFAULT_TMP_HV 80    // HV 伺服溫度制限值 (原廠設定值)
+#define DEFAULT_TMP_MV 40    // MV 伺服溫度制限值 (原廠設定值)
 
 // ===== 25軸伺服資訊 =====
 struct ServoInfo {
@@ -396,37 +62,47 @@ struct ServoInfo {
   uint16_t minAngle;
   uint16_t maxAngle;
   bool isHV;
+  bool enabled;  // false = 呢隻伺服未駁線/未安裝，safeSetPos/safeSetSpd 會跳過
+  uint16_t baselineCenter;  // 官方協議/Unity 呢隻 servo 嘅「中立值」，用嚟將
+                            // .pma/Unity 送嚟嘅絕對角度轉做 offset：
+                            // offset = rawAngle - baselineCenter,
+                            // target = homePosition + offset。
+                            // 大部分 servo 官方中立值係 7500；但肩ロールR/L
+                            // （右/左肩側擺）官方本身就唔係 7500——Excel
+                            // 解析資料同 Unity PreMaidServo.cs 都證實呢兩隻
+                            // 嘅官方 home 值係 9375~9500（右）/5625~5500
+                            // （左），因個體差異而定，用返 Unity 嘅預設值。
 };
 
 ServoInfo servoList[] = {
   // ===== HV群 (下半身) - binaryID 1-14 =====
-  { 1, 1, 10200, 10200, DEFAULT_SPEED, &icsHV, "右肩前後", 4300, 11500, true },
-  { 2, 2, 4700, 4700, DEFAULT_SPEED, &icsHV, "左肩前後", 3500, 10700, true },
-  { 3, 3, 7780, 7780, DEFAULT_SPEED, &icsHV, "右髖轉向", 6530, 9030, true },
-  { 4, 4, 7500, 7500, DEFAULT_SPEED, &icsHV, "左髖轉向", 6250, 8750, true },
-  { 5, 5, 7400, 7400, DEFAULT_SPEED, &icsHV, "右髖側擺", 6700, 8300, true },
-  { 6, 6, 7600, 7600, DEFAULT_SPEED, &icsHV, "左髖側擺", 6700, 8300, true },
-  { 7, 7, 7500, 7500, DEFAULT_SPEED, &icsHV, "右髖前後", 4700, 10200, true },
-  { 8, 8, 7500, 7500, DEFAULT_SPEED, &icsHV, "左髖前後", 4700, 10200, true },
-  { 9, 9, 7500, 7500, DEFAULT_SPEED, &icsHV, "右膝屈伸", 3950, 7600, true },
-  { 10, 10, 7500, 7500, DEFAULT_SPEED, &icsHV, "左膝屈伸", 7400, 11050, true },
-  { 11, 11, 7500, 7500, DEFAULT_SPEED, &icsHV, "右踝前後", 5700, 8300, true },
-  { 12, 12, 7550, 7550, DEFAULT_SPEED, &icsHV, "左踝前後", 6750, 9350, true },
-  { 13, 13, 7825, 7825, DEFAULT_SPEED, &icsHV, "右踝側擺", 6800, 9150, true },
-  { 14, 14, 7450, 7450, DEFAULT_SPEED, &icsHV, "左踝側擺", 6200, 8450, true },
+  { 1, 1, 10200, 10200, DEFAULT_SPEED_HV, &icsHV, "右肩前後", 4300, 11500, true, true, 7500 },
+  { 2, 2, 4700, 4700, DEFAULT_SPEED_HV, &icsHV, "左肩前後", 3500, 10700, true, true, 7500 },
+  { 3, 3, 7780, 7780, DEFAULT_SPEED_HV, &icsHV, "右髖轉向", 6530, 9030, true, true, 7500 },
+  { 4, 4, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "左髖轉向", 6250, 8750, true, true, 7500 },
+  { 5, 5, 7400, 7400, DEFAULT_SPEED_HV, &icsHV, "右髖側擺", 6700, 8300, true, true, 7500 },
+  { 6, 6, 7600, 7600, DEFAULT_SPEED_HV, &icsHV, "左髖側擺", 6700, 8300, true, true, 7500 },
+  { 7, 7, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "右髖前後", 4700, 10200, true, true, 7500 },
+  { 8, 8, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "左髖前後", 4700, 10200, true, true, 7500 },
+  { 9, 9, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "右膝屈伸", 3950, 7600, true, true, 7500 },
+  { 10, 10, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "左膝屈伸", 7400, 11050, true, true, 7500 },
+  { 11, 11, 7500, 7500, DEFAULT_SPEED_HV, &icsHV, "右踝前後", 5700, 8300, true, true, 7500 },
+  { 12, 12, 7550, 7550, DEFAULT_SPEED_HV, &icsHV, "左踝前後", 6750, 9350, true, true, 7500 },
+  { 13, 13, 7825, 7825, DEFAULT_SPEED_HV, &icsHV, "右踝側擺", 6800, 9150, true, true, 7500 },
+  { 14, 14, 7450, 7450, DEFAULT_SPEED_HV, &icsHV, "左踝側擺", 6200, 8450, true, true, 7500 },
 
   // ===== MV群 (上半身) - binaryID 21-31 =====
-  { 21, 1, 7500, 7500, DEFAULT_SPEED, &icsMV, "頭部前後", 7200, 8400, false },
-  { 22, 2, 7500, 7500, DEFAULT_SPEED, &icsMV, "頭部轉向", 5000, 10000, false },
-  { 23, 3, 7500, 7500, DEFAULT_SPEED, &icsMV, "頭部側傾", 6900, 8100, false },
-  { 24, 4, 9800, 9800, DEFAULT_SPEED, &icsMV, "右肩側擺", 7450, 10350, false },
-  { 25, 5, 5200, 5200, DEFAULT_SPEED, &icsMV, "左肩側擺", 4550, 7550, false },
-  { 26, 6, 7500, 7500, DEFAULT_SPEED, &icsMV, "右臂轉向", 4000, 11000, false },
-  { 27, 7, 7500, 7500, DEFAULT_SPEED, &icsMV, "左臂轉向", 4000, 11000, false },
-  { 28, 8, 7500, 7500, DEFAULT_SPEED, &icsMV, "右肘屈伸", 7100, 11000, false },
-  { 29, 9, 7500, 7500, DEFAULT_SPEED, &icsMV, "左肘屈伸", 4000, 7900, false },
-  { 30, 10, 5000, 5000, DEFAULT_SPEED, &icsMV, "右手轉向", 3500, 11500, false },
-  { 31, 11, 10000, 10000, DEFAULT_SPEED, &icsMV, "左手轉向", 3500, 11500, false }
+  { 21, 1, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部前後", 7200, 8400, false, true, 7500 },
+  { 22, 2, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部轉向", 5000, 10000, false, true, 7500 },
+  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, false, 7500 },  // 未駁線
+  { 24, 4, 9800, 9800, DEFAULT_SPEED_MV, &icsMV, "右肩側擺", 7450, 10350, false, true, 9500 },  // 官方中立值非7500
+  { 25, 5, 5200, 5200, DEFAULT_SPEED_MV, &icsMV, "左肩側擺", 4550, 7550, false, true, 5500 },   // 官方中立值非7500
+  { 26, 6, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右臂轉向", 4000, 11000, false, true, 7500 },
+  { 27, 7, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "左臂轉向", 4000, 11000, false, true, 7500 },
+  { 28, 8, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右肘屈伸", 7100, 11000, false, true, 7500 },
+  { 29, 9, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "左肘屈伸", 4000, 7900, false, true, 7500 },
+  { 30, 10, 5000, 5000, DEFAULT_SPEED_MV, &icsMV, "右手轉向", 3500, 11500, false, true, 7500 },
+  { 31, 11, 10000, 10000, DEFAULT_SPEED_MV, &icsMV, "左手轉向", 3500, 11500, false, true, 7500 }
 };
 
 #define TOTAL_SERVO_NUM (sizeof(servoList) / sizeof(servoList[0]))
@@ -434,24 +110,27 @@ ServoInfo servoList[] = {
 // ===== 系統狀態 =====
 String inputBuffer = "";
 
-// ===== Batch Mode 變數 =====
-char batchBuffer[BATCH_BUFFER_SIZE];
-int batchIndex = 0;
-bool batchMode = false;
-unsigned long lastCharTime = 0;
+// 最近一次有 servo 動作嘅時間戳（safeSetPos() 更新）。
+// 俾 loop() 用嚟判斷而家係咪「有動作進行緊」，決定 LED 顯示忙碌
+// 提示定係待機呼吸燈。未來加 .pma player 都會經 safeSetPos()，
+// 唔使再逐個功能加 LED code。
+unsigned long lastActivityMs = 0;
+
+// FREE ALL 之後進入「脫力模式」，LED 顯示紫色，直到下次有 servo 動作
+// （safeSetPos() 被 call）先自動解除，交返俾 updateActivityLED() 判斷。
+bool isFreeMode = false;
+
+// ===== IMU (MPU-6050) 狀態 =====
+// 純感測模組，唔接入任何控制邏輯（table_walk 完全唔會讀呢啲值）。
+// 加呢個純粹為咗俾 IMU 指令查姿態，方便實機驗證。
+#define IMU_UPDATE_INTERVAL_MS 20  // 50Hz，夠 IMU 指令即時睇數用
+unsigned long lastImuUpdateMs = 0;
+
+bool imuOk = false;               // imuInit() 結果，setup() 設定
+bool imuGyroCalibrated = false;   // 開機自動校正係咪已經做咗（做過一次就唔再做）
+#define IMU_AUTO_CAL_DELAY_MS 4000  // 開機後等 servo 行到 home 先校正，非阻塞
 
 // ===== 函式原型 =====
-void initLED();
-void setLEDRed();
-void setLEDGreen();
-void setLEDBlue();
-void setLEDPurple();
-void setLEDOff();
-void breathLED(int pin, int speed);
-
-void initMPU6050();
-void calibrateGyro(int samples = 500);
-bool readMPU6050();
 void initServos();
 void moveAllServosToHome();
 void safeStop();
@@ -461,998 +140,371 @@ void showHelp();
 bool processASCIICommand(String cmd);
 bool processMultiCommand(String cmd);
 bool processFreeCommand(String cmd);
-void executeBatchCommands();
-void processOfficialBinary();
 ServoInfo *findServoByBinaryID(uint8_t binaryID);
-void actionShakeBox_ASCII();
-void actionShakeBox_CPP();
-void actionShakeBox_ICS();
-
-// [新增] 平衡系統函式原型
-void applyBalanceCompensation();
-void processBalanceCommand(String cmd);
-
-// ===== IK Solver 常數 =====
-#define THIGH_LENGTH 65.0
-#define SHIN_LENGTH 65.0
-#define ANKLE_HEIGHT 60.0
-#define HIP_WIDTH 40.0
-#define LEG_LENGTH (THIGH_LENGTH + SHIN_LENGTH + ANKLE_HEIGHT)
-
-#define PULSE_PER_DEG 29.6296  // (11500-3500)/270
-
-// =========================================================
-// ↓↓↓ 重新編寫的核心 IK Solver (改良版) ↓↓↓
-// =========================================================
-
-class IKSolver3D {
-private:
-  float L1, L2;  // 移除了未被使用的 hipWidth 變數
-
-public:
-  // 建構子：只需傳入大腿和小腿長度
-  IKSolver3D(float thigh, float shin)
-    : L1(thigh), L2(shin) {}
-
-  bool solve(float x, float y, float z, float targetYaw,
-             float &hYaw, float &hRoll, float &hPitch,
-             float &kPitch, float &aPitch, float &aRoll, bool isRight) {
-
-    hYaw = targetYaw;
-
-    // 計算側擺 (Roll)
-    float lateralSide = isRight ? 1.0 : -1.0;
-    // 優化：使用 Arduino 內建的 RAD_TO_DEG 替換 180.0 / PI
-    hRoll = atan2(y * lateralSide, -z) * RAD_TO_DEG;
-
-    // 計算腿部實際伸展長度的「平方和」(節省重複計算)
-    float legLenSq = x * x + y * y + z * z;
-    float legLen = sqrt(legLenSq);
-
-    // 限制最大伸展長度，避免超出機械極限 (防止微軟體崩潰)
-    float maxLen = L1 + L2 - 0.5;
-    if (legLen > maxLen) {
-      legLen = maxLen;
-      legLenSq = legLen * legLen;  // 同步更新平方值
-    }
-
-    // 膝蓋屈伸 (利用餘弦定理)
-    // 優化：直接使用 legLenSq，減少開根號又平方的運算耗損
-    float cosK = (legLenSq - L1 * L1 - L2 * L2) / (2 * L1 * L2);
-    kPitch = acos(constrain(cosK, -1.0, 1.0)) * RAD_TO_DEG;
-
-    // 髖關節前後 Pitch (幾何投影修正)
-    // 修正：當腿向外展(y不為0)時，從側面看的有效Z深度會變大
-    float effectiveZ = sqrt(y * y + z * z);
-    float alpha = atan2(x, effectiveZ);
-
-    float cosBeta = (L1 * L1 + legLenSq - L2 * L2) / (2 * L1 * legLen);
-    float beta = acos(constrain(cosBeta, -1.0, 1.0));
-
-    hPitch = (alpha + beta) * RAD_TO_DEG;
-
-    // 腳踝前後 Pitch：抵銷膝蓋與髖部角度，保持腳掌與地面平行
-    aPitch = kPitch - hPitch;
-
-    // 腳踝側擺 Roll：抵銷髖關節側擺，保持腳掌貼地
-    aRoll = -hRoll;
-
-    return true;
-  }
-
-  // =========================================================
-  // ↓↓↓ 改良版的即時 IK 測試函數 ↓↓↓
-  // =========================================================
-  void testSolver(float x, float y, float z, float yaw, bool isRight, bool plotMode = false) {
-    float hYaw, hRoll, hPitch, kPitch, aPitch, aRoll;
-
-    // 呼叫我們剛剛改良過的 solve 函數
-    bool isValid = solve(x, y, z, yaw, hYaw, hRoll, hPitch, kPitch, aPitch, aRoll, isRight);
-
-    // 1. 安全檢查：確保 IK 有成功算出結果，且沒有超出極限
-    if (!isValid) {
-      Serial1.println("警告：超出 IK 運算範圍！指令已忽略。");
-      return;  // 立即中止，保護硬體
-    }
-
-    // 2. 輸出模式選擇
-    if (plotMode) {
-      // 繪圖模式：專門給 Arduino Serial Plotter 使用
-      // 格式：數值1,數值2,數值3... (不加多餘文字)
-      Serial1.print(hYaw);
-      Serial1.print(",");
-      Serial1.print(hRoll);
-      Serial1.print(",");
-      Serial1.print(hPitch);
-      Serial1.print(",");
-      Serial1.print(kPitch);
-      Serial1.print(",");
-      Serial1.print(aPitch);
-      Serial1.print(",");
-      Serial1.println(aRoll);
-    } else {
-      // 文字除錯模式：整理得更乾淨易讀
-      Serial1.print(F("[IK即時測試] "));
-      Serial1.print(isRight ? F("右腳") : F("左腳"));
-      Serial1.print(F(" | 座標("));
-      Serial1.print(x);
-      Serial1.print(F(","));
-      Serial1.print(y);
-      Serial1.print(F(","));
-      Serial1.print(z);
-      Serial1.print(F(") -> 角度: 髖Y="));
-      Serial1.print(hYaw);
-      Serial1.print(F(", 髖R="));
-      Serial1.print(hRoll);
-      Serial1.print(F(", 髖P="));
-      Serial1.print(hPitch);
-      Serial1.print(F(", 膝="));
-      Serial1.print(kPitch);
-      Serial1.print(F(", 踝P="));
-      Serial1.print(aPitch);
-      Serial1.print(F(", 踝R="));
-      Serial1.println(aRoll);
-    }
-  }
-};
-
-// =========================================================
-// WalkGenerator 類別 (使用改良版 IK Solver)
-// =========================================================
-
-class WalkGenerator {
-private:
-  IKSolver3D ikSolver;
-  float phase;
-  bool walking;
-  int stepsRemaining;
-  unsigned long lastUpdate, lastServoSend;
-
-  bool walkF, walkB, turnL, turnR;
-
-  float rX, rY, rZ, rYaw, lX, lY, lZ, lYaw;
-  float ry, rr, rp, rk, rap, rar, ly, lr, lp, lk, lap, lar;
-  float p3, p5, p7, p9, p11, p13, p4, p6, p8, p10, p12, p14;
-
-  // 可即時調整的 IK 參數
-  float swayAmount = 14.0;
-  float strideAmount = 20.0;
-  float liftAmount = 22.0;
-  float turnAmount = 12.0;
-  float walkSpeed = 1.5;
-  float squatDepth = -120.0;
-  float ankleGain = 0.9;
-  float hipPitchGain = 1.0;
-  float hipRollGain = 1.0;
-  float kneeGain = 1.0;
-  float anklePitchGain = 1.0;
-  float ankleRollGain = 1.0;
-
-  // 調試模式開關
-  bool ikDebugMode = false;
-  bool walkDebugMode = false;
-  int ikVersion = 1;
-
-public:
-  // 修改建構子：移除了 HIP_WIDTH 參數
-  WalkGenerator()
-    : ikSolver(THIGH_LENGTH, SHIN_LENGTH), phase(0), walking(false), stepsRemaining(0) {
-    walkF = walkB = turnL = turnR = false;
-    lastUpdate = lastServoSend = 0;
-    memset(&rX, 0, sizeof(rX));
-  }
-
-  void setDirection(char dir) {
-    walkF = (dir == 'F');
-    walkB = (dir == 'B');
-    turnL = (dir == 'L');
-    turnR = (dir == 'R');
-  }
-
-  void walkSteps(int s) {
-    stepsRemaining = s;
-    walking = true;
-    phase = 0;
-    lastUpdate = millis();
-    lastServoSend = millis();
-    Serial1.print(F("開始行 "));
-    Serial1.print(s);
-    Serial1.println(F(" 步"));
-  }
-
-  void safeStop() {
-    Serial1.println(F("🛑 安全停止中..."));
-    walking = false;
-    stepsRemaining = 0;
-    phase = 0;
-    moveAllServosToHome();
-    Serial1.println(F("✅ 安全停止完成"));
-  }
-
-  bool isWalking() {
-    return walking;
-  }
-
-  // 即時參數調整方法
-  void setParam(String name, float value) {
-    if (name == "SWAY") {
-      swayAmount = constrain(value, 5, 35);
-      Serial1.print("✅ 重心擺幅 = ");
-      Serial1.println(swayAmount);
-    } else if (name == "STRIDE") {
-      strideAmount = constrain(value, 10, 45);
-      Serial1.print("✅ 步幅 = ");
-      Serial1.println(strideAmount);
-    } else if (name == "LIFT") {
-      liftAmount = constrain(value, 15, 45);
-      Serial1.print("✅ 抬腿高度 = ");
-      Serial1.println(liftAmount);
-    } else if (name == "TURN") {
-      turnAmount = constrain(value, 5, 30);
-      Serial1.print("✅ 轉彎幅度 = ");
-      Serial1.println(turnAmount);
-    } else if (name == "SPEED") {
-      walkSpeed = constrain(value, 0.8, 2.5);
-      Serial1.print("✅ 步行速度 = ");
-      Serial1.println(walkSpeed);
-    } else if (name == "SQUAT") {
-      squatDepth = constrain(value, -140, -100);
-      Serial1.print("✅ 蹲踞深度 = ");
-      Serial1.println(squatDepth);
-    } else if (name == "ANKLEGAIN") {
-      ankleGain = constrain(value, 0.5, 1.5);
-      Serial1.print("✅ 腳踝增益 = ");
-      Serial1.println(ankleGain);
-    } else if (name == "HIPPITCH") {
-      hipPitchGain = constrain(value, 0.7, 1.3);
-      Serial1.print("✅ 髖 Pitch 增益 = ");
-      Serial1.println(hipPitchGain);
-    } else if (name == "HIPROLL") {
-      hipRollGain = constrain(value, 0.7, 1.3);
-      Serial1.print("✅ 髖 Roll 增益 = ");
-      Serial1.println(hipRollGain);
-    } else if (name == "KNEE") {
-      kneeGain = constrain(value, 0.7, 1.3);
-      Serial1.print("✅ 膝蓋增益 = ");
-      Serial1.println(kneeGain);
-    } else if (name == "ANKLEPITCH") {
-      anklePitchGain = constrain(value, 0.5, 1.5);
-      Serial1.print("✅ 腳踝 Pitch 增益 = ");
-      Serial1.println(anklePitchGain);
-    } else if (name == "ANKLEROLL") {
-      ankleRollGain = constrain(value, 0.5, 1.5);
-      Serial1.print("✅ 腳踝 Roll 增益 = ");
-      Serial1.println(ankleRollGain);
-    } else {
-      Serial1.print("❌ 未知參數: ");
-      Serial1.println(name);
-      Serial1.println("可用參數: SWAY, STRIDE, LIFT, TURN, SPEED, SQUAT, ANKLEGAIN, HIPPITCH, HIPROLL, KNEE, ANKLEPITCH, ANKLEROLL");
-    }
-  }
-
-  void setIKVersion(int ver) {
-    ikVersion = constrain(ver, 1, 3);
-    Serial1.print("✅ 切換到 IK 版本 ");
-    Serial1.println(ikVersion);
-    if (ikVersion == 1) Serial1.println("  版本1: 標準 IK");
-    else if (ikVersion == 2) Serial1.println("  版本2: 改良版 (+5% X, -2% Z)");
-    else if (ikVersion == 3) Serial1.println("  版本3: 實驗版 (+2% Z, 腳踝+20%)");
-  }
-
-  void showParams() {
-    Serial1.println("\n╔════════════════════════════════════════╗");
-    Serial1.println("║       當前 IK 步行參數                  ║");
-    Serial1.println("╠════════════════════════════════════════╣");
-    Serial1.print("║ SWAY:     ");
-    Serial1.print(swayAmount, 1);
-    Serial1.println("                    ║");
-    Serial1.print("║ STRIDE:   ");
-    Serial1.print(strideAmount, 1);
-    Serial1.println("                    ║");
-    Serial1.print("║ LIFT:     ");
-    Serial1.print(liftAmount, 1);
-    Serial1.println("                    ║");
-    Serial1.print("║ TURN:     ");
-    Serial1.print(turnAmount, 1);
-    Serial1.println("                    ║");
-    Serial1.print("║ SPEED:    ");
-    Serial1.print(walkSpeed, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ SQUAT:    ");
-    Serial1.print(squatDepth, 1);
-    Serial1.println("                    ║");
-    Serial1.print("║ ANKLEGAIN:");
-    Serial1.print(ankleGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ HIPPITCH: ");
-    Serial1.print(hipPitchGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ HIPROLL:  ");
-    Serial1.print(hipRollGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ KNEE:     ");
-    Serial1.print(kneeGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ ANKLEPITCH:");
-    Serial1.print(anklePitchGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ ANKLEROLL: ");
-    Serial1.print(ankleRollGain, 2);
-    Serial1.println("                    ║");
-    Serial1.print("║ IK版本:   ");
-    Serial1.print(ikVersion);
-    if (ikVersion == 1) Serial1.println(" (標準)             ║");
-    else if (ikVersion == 2) Serial1.println(" (改良)             ║");
-    else Serial1.println(" (實驗)             ║");
-    Serial1.print("║ IK調試:   ");
-    Serial1.print(ikDebugMode ? "開啟" : "關閉");
-    Serial1.println("                    ║");
-    Serial1.println("╚════════════════════════════════════════╝\n");
-  }
-
-  void setDebugMode(String mode, bool enable) {
-    if (mode == "IK") {
-      ikDebugMode = enable;
-      Serial1.print("✅ IK 調試模式 ");
-      Serial1.println(enable ? "開啟" : "關閉");
-    } else if (mode == "WALK") {
-      walkDebugMode = enable;
-      Serial1.print("✅ 步行調試模式 ");
-      Serial1.println(enable ? "開啟" : "關閉");
-    }
-  }
-
-  void testIK(float x, float y, float z, float yaw, bool isRight, bool plotMode = false) {
-    ikSolver.testSolver(x, y, z, yaw, isRight, plotMode);
-  }
-
-  void updateWalk() {
-    if (!walking) return;
-
-    unsigned long now = millis();
-    float dt = (now - lastUpdate) / 1000.0;
-    if (dt <= 0) return;
-
-    lastUpdate = now;
-
-    phase += (2.0 / walkSpeed) * dt;
-
-    if (phase >= 2.0) {
-      phase -= 2.0;
-      if (stepsRemaining > 0) {
-        stepsRemaining--;
-        if (stepsRemaining <= 0) {
-          walking = false;
-          moveAllServosToHome();
-          Serial1.println(F("✅ 步行完成"));
-          // [新增] 步行完成切回 Idle 平衡模式
-          if (balanceSystem.enabled) balanceSystem.setWalkingMode(false);
-          return;
-        }
-      }
-    }
-
-    float sway = swayAmount * sin(phase * PI);
-    float liftH = liftAmount;
-    float stride = strideAmount;
-    float turn = turnAmount;
-
-    float tR = phase;
-    float tL = fmod(phase + 1.0, 2.0);
-
-    auto calcLeg = [&](float t, float &tx, float &ty, float &tz, float &tyaw, bool isR) {
-      float moveDir = (walkF ? 1.0 : (walkB ? -1.0 : 0.0));
-      float turnDir = (turnL ? 1.0 : (turnR ? -1.0 : 0.0));
-
-      ty = -sway;
-
-      if (t < 1.0) {
-        float smooth = cos(t * PI);
-        tx = moveDir * (stride / 2.0) * smooth;
-        tyaw = turnDir * (turn / 2.0) * smooth;
-        tz = squatDepth;
-      } else {
-        float swingT = t - 1.0;
-        float smooth = -cos(swingT * PI);
-        tx = moveDir * (stride / 2.0) * smooth;
-        tyaw = turnDir * (turn / 2.0) * smooth;
-        tz = squatDepth + liftH * sin(swingT * PI);
-      }
-    };
-
-    calcLeg(tR, rX, rY, rZ, rYaw, true);
-    calcLeg(tL, lX, lY, lZ, lYaw, false);
-
-    // IK 求解（支援版本切換）
-    switch (ikVersion) {
-      case 1:  // 標準版本
-        ikSolver.solve(rX, rY, rZ, rYaw, ry, rr, rp, rk, rap, rar, true);
-        ikSolver.solve(lX, lY, lZ, lYaw, ly, lr, lp, lk, lap, lar, false);
-        break;
-      case 2:  // 改良版：增加 X 方向行程，減少 Z 方向
-        ikSolver.solve(rX * 1.05, rY, rZ * 0.98, rYaw, ry, rr, rp, rk, rap, rar, true);
-        ikSolver.solve(lX * 1.05, lY, lZ * 0.98, lYaw, ly, lr, lp, lk, lap, lar, false);
-        break;
-      case 3:  // 實驗版：增加 Z 方向行程，增加腳踝角度
-        ikSolver.solve(rX, rY, rZ * 1.02, rYaw * 0.95, ry, rr, rp, rk, rap, rar, true);
-        ikSolver.solve(lX, lY, lZ * 1.02, lYaw * 0.95, ly, lr, lp, lk, lap, lar, false);
-        rap = rap * 1.2;
-        lap = lap * 1.2;
-        break;
-    }
-
-    // 應用增益
-    rp = rp * hipPitchGain;
-    rr = rr * hipRollGain;
-    rk = rk * kneeGain;
-    rap = rap * ankleGain * anklePitchGain;
-    rar = rar * ankleRollGain;
-
-    lp = lp * hipPitchGain;
-    lr = lr * hipRollGain;
-    lk = lk * kneeGain;
-    lap = lap * ankleGain * anklePitchGain;
-    lar = lar * ankleRollGain;
-
-    // 抬腿時，腳尖微向上勾 5 度
-    if (rZ > squatDepth + 1.0) rap += 5.0;
-    if (lZ > squatDepth + 1.0) lap += 5.0;
-
-    // IK 調試輸出
-    if (ikDebugMode) {
-      static unsigned long lastIKDebug = 0;
-      if (millis() - lastIKDebug >= 200) {
-        lastIKDebug = millis();
-        Serial1.print("IK-DEBUG: Phase=");
-        Serial1.print(phase, 2);
-        Serial1.print(" R: P=");
-        Serial1.print(rp, 1);
-        Serial1.print(" K=");
-        Serial1.print(rk, 1);
-        Serial1.print(" A=");
-        Serial1.print(rap, 1);
-        Serial1.print(" L: P=");
-        Serial1.print(lp, 1);
-        Serial1.print(" K=");
-        Serial1.print(lk, 1);
-        Serial1.print(" A=");
-        Serial1.println(lap, 1);
-      }
-    }
-
-    // 角度映射
-    p3 = 7780 + ry * PULSE_PER_DEG;
-    p5 = 7400 + rr * PULSE_PER_DEG;
-    p7 = 7500 - rp * PULSE_PER_DEG;
-    p9 = 7500 - rk * PULSE_PER_DEG;
-    p11 = 7500 - rap * PULSE_PER_DEG;
-    p13 = 7825 + rar * PULSE_PER_DEG;
-
-    p4 = 7500 + ly * PULSE_PER_DEG;
-    p6 = 7600 - lr * PULSE_PER_DEG;
-    p8 = 7500 + lp * PULSE_PER_DEG;
-    p10 = 7500 + lk * PULSE_PER_DEG;
-    p12 = 7550 + lap * PULSE_PER_DEG;
-    p14 = 7450 - lar * PULSE_PER_DEG;
-
-    if (now - lastServoSend >= 20) {
-      sendAngles();
-      lastServoSend = now;
-    }
-  }
-
-  void sendAngles() {
-    static bool speedSet = false;
-    static unsigned long lastDebugTime = 0;
-
-    if (!speedSet) {
-      int legServos[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
-      for (int i = 0; i < 12; i++) {
-        icsHV.setSpd(legServos[i], 50);
-      }
-      speedSet = true;
-      delay(2);
-    }
-
-    uint16_t s3 = constrain((uint16_t)round(p3), 6530, 9030);
-    uint16_t s5 = constrain((uint16_t)round(p5), 6700, 8300);
-    uint16_t s7 = constrain((uint16_t)round(p7), 4700, 10200);
-    uint16_t s9 = constrain((uint16_t)round(p9), 3950, 7600);
-    uint16_t s11 = constrain((uint16_t)round(p11), 5700, 8300);
-    uint16_t s13 = constrain((uint16_t)round(p13), 6800, 9150);
-
-    uint16_t s4 = constrain((uint16_t)round(p4), 6250, 8750);
-    uint16_t s6 = constrain((uint16_t)round(p6), 6700, 8300);
-    uint16_t s8 = constrain((uint16_t)round(p8), 4700, 10200);
-    uint16_t s10 = constrain((uint16_t)round(p10), 7400, 11050);
-    uint16_t s12 = constrain((uint16_t)round(p12), 6750, 9350);
-    uint16_t s14 = constrain((uint16_t)round(p14), 6200, 8450);
-
-    if (walkDebugMode && (millis() - lastDebugTime >= 100)) {
-      lastDebugTime = millis();
-      Serial1.print("WALK-DEBUG: Phase=");
-      Serial1.print(phase, 2);
-      Serial1.print(" R7=");
-      Serial1.print(s7);
-      Serial1.print(" R9=");
-      Serial1.print(s9);
-      Serial1.print(" R11=");
-      Serial1.print(s11);
-      Serial1.print(" L8=");
-      Serial1.print(s8);
-      Serial1.print(" L10=");
-      Serial1.print(s10);
-      Serial1.print(" L12=");
-      Serial1.println(s12);
-    }
-
-    // [FIX 2] 先更新 currentTunePos，供 applyBalanceCompensation() 讀取
-    // 避免 walk 同 balance 雙重寫入 HV11-14 造成抖動
-    ServoInfo *sv11 = findServoByBinaryID(11);
-    ServoInfo *sv12 = findServoByBinaryID(12);
-    ServoInfo *sv13 = findServoByBinaryID(13);
-    ServoInfo *sv14 = findServoByBinaryID(14);
-    if (sv11) sv11->currentTunePos = s11;
-    if (sv12) sv12->currentTunePos = s12;
-    if (sv13) sv13->currentTunePos = s13;
-    if (sv14) sv14->currentTunePos = s14;
-
-    // HV3-10 直接寫入
-    icsHV.setPos(3, s3);
-    icsHV.setPos(5, s5);
-    icsHV.setPos(7, s7);
-    icsHV.setPos(9, s9);
-    icsHV.setPos(4, s4);
-    icsHV.setPos(6, s6);
-    icsHV.setPos(8, s8);
-    icsHV.setPos(10, s10);
-    // [FIX 2] HV11-14 由 applyBalanceCompensation() 統一寫入，避免雙重寫入
-  }
-};
-
-WalkGenerator walkGen;
-
-// =========================================================
-// ↑↑↑ IK 核心邏輯結束，以下全部原封不動 ↑↑↑
-// =========================================================
-
-// =========================================================
-// ↓↓↓ [新增] 平衡補償函式 ↓↓↓
-// =========================================================
-
-void applyBalanceCompensation() {
-  // [FIX 3] 移除 early return，統一入口寫 HV11-14
-  // balance 停用時 pp=rp=0，只寫入 walk 基準位置（無補償）
-  // balance 啟用時疊加 PID 補償
-
-  float ppd = (float)PULSE_PER_DEG;
-  int16_t pp = balanceSystem.enabled ? (int16_t)(balanceSystem.pitchCompensation * ppd) : 0;
-  int16_t rp = balanceSystem.enabled ? (int16_t)(balanceSystem.rollCompensation * ppd) : 0;
-
-  // 每隻踝獨立符號
-  int16_t t11 = pp * balanceSystem.hv11Sign;
-  int16_t t12 = pp * balanceSystem.hv12Sign;
-  int16_t t13 = rp * balanceSystem.hv13Sign;
-  int16_t t14 = rp * balanceSystem.hv14Sign;
-
-  // Rate limiting：balance 停用時重置累積值
-  auto rl = [&](int16_t n, int16_t &l) -> int16_t {
-    if (!balanceSystem.enabled) { l = 0; return 0; }
-    int16_t d = constrain((int16_t)(n - l),
-                          (int16_t)-balanceSystem.maxRatePulse,
-                          (int16_t)balanceSystem.maxRatePulse);
-    l += d;
-    return l;
-  };
-
-  int16_t r11 = rl(t11, balanceSystem.lastRightPitchPulse);
-  int16_t r12 = rl(t12, balanceSystem.lastLeftPitchPulse);
-  int16_t r13 = rl(t13, balanceSystem.lastRightRollPulse);
-  int16_t r14 = rl(t14, balanceSystem.lastLeftRollPulse);
-
-  ServoInfo *s11 = findServoByBinaryID(11);
-  ServoInfo *s12 = findServoByBinaryID(12);
-  ServoInfo *s13 = findServoByBinaryID(13);
-  ServoInfo *s14 = findServoByBinaryID(14);
-  if (!s11 || !s12 || !s13 || !s14) return;
-
-  // [FIX 3] 統一以 currentTunePos 為基準
-  // walk 時 sendAngles() 已先更新；靜止時 moveAllServosToHome() 已設為 homePosition
-  uint16_t base11 = s11->currentTunePos;
-  uint16_t base12 = s12->currentTunePos;
-  uint16_t base13 = s13->currentTunePos;
-  uint16_t base14 = s14->currentTunePos;
-
-  icsHV.setPos(11, (uint16_t)constrain((int32_t)base11 + r11, (int32_t)s11->minAngle, (int32_t)s11->maxAngle));
-  icsHV.setPos(12, (uint16_t)constrain((int32_t)base12 + r12, (int32_t)s12->minAngle, (int32_t)s12->maxAngle));
-  icsHV.setPos(13, (uint16_t)constrain((int32_t)base13 + r13, (int32_t)s13->minAngle, (int32_t)s13->maxAngle));
-  icsHV.setPos(14, (uint16_t)constrain((int32_t)base14 + r14, (int32_t)s14->minAngle, (int32_t)s14->maxAngle));
-}
-
-// =========================================================
-// ↓↓↓ [新增] 平衡命令處理 ↓↓↓
-// =========================================================
-
-void processBalanceCommand(String cmd) {
-  cmd.trim();
-  cmd.toUpperCase();
-  if (cmd == "CALIBRATE") {
-    if (mpuData.calibrated && readMPU6050()) {
-      balanceSystem.targetPitch = -atan2f(mpuData.az, mpuData.ay) * RAD_TO_DEG;
-      balanceSystem.targetRoll = atan2f(mpuData.ax, mpuData.ay) * RAD_TO_DEG;
-      balanceSystem.pitchFiltered = balanceSystem.targetPitch;
-      balanceSystem.rollFiltered = balanceSystem.targetRoll;
-      balanceSystem.pitchPID.initMeasurement(balanceSystem.targetPitch);
-      balanceSystem.rollPID.initMeasurement(balanceSystem.targetRoll);
-      balanceSystem.pitchPID.integral = 0;
-      balanceSystem.rollPID.integral = 0;
-      balanceSystem.lastRightPitchPulse = 0;
-      balanceSystem.lastLeftPitchPulse = 0;
-      balanceSystem.lastRightRollPulse = 0;
-      balanceSystem.lastLeftRollPulse = 0;
-      Serial1.println(F("✅ 平衡目標已設:"));
-      Serial1.print(F("   Pitch="));
-      Serial1.print(balanceSystem.targetPitch, 2);
-      Serial1.println(F("°"));
-      Serial1.print(F("   Roll ="));
-      Serial1.print(balanceSystem.targetRoll, 2);
-      Serial1.println(F("°"));
-    } else {
-      Serial1.println(F("❌ 請先 CALIBRATE"));
-    }
-  } else if (cmd == "ON") {
-    balanceSystem.enabled = true;
-    balanceSystem.resetStats();
-    Serial1.println(F("✅ 平衡啟用"));
-    setLEDPurple();
-  } else if (cmd == "OFF") {
-    balanceSystem.enabled = false;
-    Serial1.println(F("❌ 平衡停用"));
-    setLEDBlue();
-  } else if (cmd == "STATUS") {
-    balanceSystem.printStatus();
-  } else if (cmd == "RESET") {
-    balanceSystem.resetStats();
-  } else if (cmd == "DEBUG ON") {
-    balanceSystem.debugEnabled = true;
-    Serial1.println(F("✅ Debug ON"));
-  } else if (cmd == "DEBUG OFF") {
-    balanceSystem.debugEnabled = false;
-    Serial1.println(F("❌ Debug OFF"));
-  } else if (cmd == "IDLE") {
-    balanceSystem.setWalkingMode(false);
-  } else if (cmd == "WALKING") {
-    balanceSystem.setWalkingMode(true);
-  }
-  // Idle PID
-  else if (cmd.startsWith("IDLE PITCH KP ")) {
-    balanceSystem.idlePitchParams.Kp = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("IDLE PITCH KI ")) {
-    balanceSystem.idlePitchParams.Ki = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("IDLE PITCH KD ")) {
-    balanceSystem.idlePitchParams.Kd = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("IDLE ROLL KP ")) {
-    balanceSystem.idleRollParams.Kp = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("IDLE ROLL KI ")) {
-    balanceSystem.idleRollParams.Ki = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("IDLE ROLL KD ")) {
-    balanceSystem.idleRollParams.Kd = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  }
-  // Walk PID
-  else if (cmd.startsWith("WALK PITCH KP ")) {
-    balanceSystem.walkPitchParams.Kp = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("WALK PITCH KI ")) {
-    balanceSystem.walkPitchParams.Ki = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("WALK PITCH KD ")) {
-    balanceSystem.walkPitchParams.Kd = cmd.substring(14).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("WALK ROLL KP ")) {
-    balanceSystem.walkRollParams.Kp = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("WALK ROLL KI ")) {
-    balanceSystem.walkRollParams.Ki = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("WALK ROLL KD ")) {
-    balanceSystem.walkRollParams.Kd = cmd.substring(13).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd == "RELOAD") {
-    balanceSystem._loadModeParams();
-    Serial1.println(F("✅ 已載入 PID"));
-  }
-  // 快速調整當前 PID
-  else if (cmd.startsWith("PITCH KP ")) {
-    balanceSystem.pitchPID.Kp = cmd.substring(9).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("PITCH KI ")) {
-    balanceSystem.pitchPID.Ki = cmd.substring(9).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("PITCH KD ")) {
-    balanceSystem.pitchPID.Kd = cmd.substring(9).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("ROLL KP ")) {
-    balanceSystem.rollPID.Kp = cmd.substring(8).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("ROLL KI ")) {
-    balanceSystem.rollPID.Ki = cmd.substring(8).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("ROLL KD ")) {
-    balanceSystem.rollPID.Kd = cmd.substring(8).toFloat();
-    Serial1.println(F("✅"));
-  } else if (cmd.startsWith("RATE ")) {
-    balanceSystem.maxRatePulse = max(10.0f, cmd.substring(5).toFloat());
-    Serial1.print(F("✅ Rate="));
-    Serial1.println(balanceSystem.maxRatePulse, 0);
-  }
-  // 每隻踝獨立翻轉
-  else if (cmd == "HV11 INVERT") {
-    balanceSystem.hv11Sign = -balanceSystem.hv11Sign;
-    Serial1.print(F("✅ HV11="));
-    Serial1.println(balanceSystem.hv11Sign);
-  } else if (cmd == "HV12 INVERT") {
-    balanceSystem.hv12Sign = -balanceSystem.hv12Sign;
-    Serial1.print(F("✅ HV12="));
-    Serial1.println(balanceSystem.hv12Sign);
-  } else if (cmd == "HV13 INVERT") {
-    balanceSystem.hv13Sign = -balanceSystem.hv13Sign;
-    Serial1.print(F("✅ HV13="));
-    Serial1.println(balanceSystem.hv13Sign);
-  } else if (cmd == "HV14 INVERT") {
-    balanceSystem.hv14Sign = -balanceSystem.hv14Sign;
-    Serial1.print(F("✅ HV14="));
-    Serial1.println(balanceSystem.hv14Sign);
-  } else if (cmd.startsWith("FILTER ")) {
-    balanceSystem.compFilterAlpha = constrain(cmd.substring(7).toFloat(), 0.0f, 1.0f);
-    Serial1.print(F("✅ alpha="));
-    Serial1.println(balanceSystem.compFilterAlpha, 3);
-  } else if (cmd.startsWith("MAXCOMP PITCH ")) {
-    balanceSystem.maxPitchComp = cmd.substring(14).toFloat();
-    Serial1.print(F("✅ maxP="));
-    Serial1.println(balanceSystem.maxPitchComp, 1);
-  } else if (cmd.startsWith("MAXCOMP ROLL ")) {
-    balanceSystem.maxRollComp = cmd.substring(13).toFloat();
-    Serial1.print(F("✅ maxR="));
-    Serial1.println(balanceSystem.maxRollComp, 1);
-  } else if (cmd.startsWith("DEADZONE PITCH ")) {
-    balanceSystem.pitchDeadzone = cmd.substring(15).toFloat();
-    Serial1.print(F("✅ dzP="));
-    Serial1.println(balanceSystem.pitchDeadzone, 2);
-  } else if (cmd.startsWith("DEADZONE ROLL ")) {
-    balanceSystem.rollDeadzone = cmd.substring(14).toFloat();
-    Serial1.print(F("✅ dzR="));
-    Serial1.println(balanceSystem.rollDeadzone, 2);
+bool safeSetPos(ServoInfo *servo, uint16_t pos);
+bool safeSetSpd(ServoInfo *servo, uint8_t spd);
+bool safeSetStrc(ServoInfo *servo, uint8_t strc);
+bool safeSetCur(ServoInfo *servo, uint8_t curlim);
+bool safeSetTmp(ServoInfo *servo, uint8_t tmplim);
+uint16_t applyHomeOffset(ServoInfo *servo, int rawAngle, int baselineCenter);
+
+int setStrc(byte id, unsigned int strc);
+int setSpd(byte id, unsigned int spd);
+int setCur(byte id, unsigned int curlim);
+int setTmp(byte id, unsigned int tmplim);
+
+int getStrc(byte id);
+int getSpd(byte id);
+int getCur(byte id);
+int getTmp(byte id);
+
+// ===== .pma / ICS binary 封包接收 =====
+void pmaReceiveUpdate();
+
+
+#include "table_walk.h"
+
+tw_walker_t tableWalker;
+tw_params_t tableWalkParams;
+
+// 上一次真正送咗去伺服嘅 table_walk 輸出值，用嚟偵測「呢次 tick 嘅
+// 輸出同上次係咪完全一樣」——如果一樣，代表機械人其實冇郁（例如
+// TW_STOPPED 底下 x2/y2 都係 0），唔應該當「有動作」，咁樣先可以
+// 令 lastActivityMs 準確反映真正嘅動作狀態，LED 先可以真正顯示
+// 「靜止待機」。
+int lastSentServoVal[TW_NUM_SERVOS];
+bool lastSentServoValInit = false;
+
+// tick 間隔（毫秒）。kazz 原版 15ms×9=135ms（10分割表），
+// 現用 20 分割表，同一段真實步行時間需行多一倍 frame 先完成一個週期。
+#define TABLE_WALK_TICK_MS 60
+unsigned long lastWalkTickMs = 0;
+
+// ===== .pma-style servo ID → ServoInfo* 對照 =====
+// table_walk 輸出嘅係「理論pulse值」，冇考慮你 servoList[] 入面
+// 每隻伺服實際嘅安全角度範圍。每次都要經呢個 helper 攞返
+// ServoInfo，再用佢嘅 minAngle/maxAngle 做 clamp 先可以送去伺服。
+ServoInfo *findServoByPmaId(uint8_t pmaId) {
+  // HV bus：pma_id 為偶數，0x02→binaryID1, 0x04→binaryID2, ... 0x1C→binaryID14
+  // MV bus（上半身）：pma_id 為奇數 0x03~0x17，對應官方 MV servoID 1~11，
+  // binaryID = 20 + servoID（0x03→21頭ピッチ, 0x05→22頭ヨー, 0x07→23頭ロール,
+  // 0x09→24右肩側擺, 0x0B→25左肩側擺, ... 0x17→31左手轉向）
+  uint8_t binaryID;
+  if (pmaId % 2 == 0) {
+    binaryID = pmaId / 2;                // HV: 0x02->1, 0x04->2 ... 0x1C->14
+  } else if (pmaId >= 0x03 && pmaId <= 0x17) {
+    binaryID = 20 + ((pmaId - 1) / 2);   // MV: 0x03->21 ... 0x17->31
   } else {
-    Serial1.println(F("❓ 未知 BALANCE 子命令，輸入 H 查看"));
+    return NULL;                        // 未定義嘅 pma ID
   }
+  return findServoByBinaryID(binaryID);
 }
 
-// ↑↑↑ 平衡函式結束 ↑↑↑
+// ===== 共用轉換：將「相對7500嘅offset」疊加去伺服真正嘅homePosition =====
+// table_walk（TW_CENTER=7500）同 .pma 檔案格式（已實測10個真實動作檔案，
+// 證實全部伺服統一以7500做基準）都係用呢個假設砌出嚟嘅相對角度。
+// 但 homePosition 係你手動實測校準、令機械人真正企得直嘅權威數值
+// （唔等於7500，例如兩邊肩膟裝配唔對稱），所以呢兩個來源嘅角度都
+// 一定要經呢條轉換式，先可以送去伺服，否則會用錯基準，企得直、
+// 一播動作就變形。
+uint16_t applyHomeOffset(ServoInfo *servo, int rawAngle, int baselineCenter) {
+  int offset = rawAngle - baselineCenter;
+  int targetAngle = (int)servo->homePosition + offset;
+  return (uint16_t)constrain(targetAngle, (int)servo->minAngle, (int)servo->maxAngle);
+}
+
+// ===== 將 table_walk 嘅輸出，經 clamp 之後送去 ICS bus =====
+// 只有喺呢隻 servo 嘅目標值同上一次 tick 唔同嗰陣先真正送指令，
+// 避免 TW_STOPPED（企定不動）都不斷刷新相同角度，一來慳返 ICS bus
+// 流量，二來令 safeSetPos() 準確反映「真正有郁」，LED 活動指示
+// （updateActivityLED()）先可以喺靜止時正確顯示待機藍燈。
+void sendTableWalkAngles() {
+  for (int i = 0; i < TW_NUM_SERVOS; i++) {
+    uint8_t pmaId = table_walk_servo_pma_id(i);
+    int rawAngle = tableWalker.servo_val[i];
+
+    ServoInfo *servo = findServoByPmaId(pmaId);
+    if (!servo) continue;
+
+    if (lastSentServoValInit && rawAngle == lastSentServoVal[i]) {
+      continue;  // 同上次一樣，冇實質變化，唔使送
+    }
+    lastSentServoVal[i] = rawAngle;
+
+    uint16_t safeAngle = applyHomeOffset(servo, rawAngle, TW_CENTER);
+    safeSetPos(servo, safeAngle);
+    servo->currentTunePos = safeAngle;   // 保持更新，方便之後其他系統（例如將來重做嘅
+                                          // balance）讀取呢個做基準位置
+  }
+  lastSentServoValInit = true;
+}
+
+// ===== 簡易 wrapper，模擬原本 WalkGenerator 嘅 isWalking()/safeStop() 介面 =====
+// 方便下面 processCommand() 同 loop() 嘅呼叫方式盡量少改
+bool tableWalkIsWalking() {
+  return !table_walk_is_stopped(&tableWalker);
+}
+
+void tableWalkSafeStop() {
+  tw_walker_init(&tableWalker);   // 強制歸零，即時停（唔等收步動畫）
+  moveAllServosToHome();
+}
+
+
 // =========================================================
+// ===== .pma / ICS binary 封包播放器 =====
+// =========================================================
+// 資料來源：藍牙（Serial1）即時串流，唔喺 MCU 度存住成隻 .pma 檔案。
+// 對面（PC/App/自家 script）逐個 packet send 過嚟，MCU 收齊一個
+// packet 就即刻執行、然後準備接收下一個——「send 一次做一次」。
+//
+// 封包格式（同 Unity/官方 App 用嘅協議一致，經社群 PMAAnalyze.rb 驗證）：
+//   [LEN] [CMD] ... payload ... [XOR checksum]
+// LEN 係由呢個 byte 自己開始計、含 checksum 喺內嘅總長度。
+// checksum = LEN ^ CMD ^ 全部 payload byte，應等於封包最後一個 byte。
+//
+// 支援嘅 command：
+//   0x18 複數伺服角度指示：00(保留), SPD, {pmaID, LO, HI} xN
+//   0x19 複數伺服 SPEED/STRETCH 設定：(00=SPEED|10=STRETCH), {pmaID,值} xN
+// 其餘 command（0x02/0x07/0x15/0x17 等，原廠用嚟做內部狀態/迴圈判斷）
+// 冇連接任何實體暫存器可供分支，對「郁機械人」冇實質意義，收到照樣
+// 驗 checksum、確認冇解析錯位，但唔執行任何動作，直接跳去下一個封包。
+//
+// 接收用非阻塞狀態機，逐 byte 喺 loop() 度儲，唔用 while(available()<N)
+// 阻塞等待，避免藍牙傳輸未到齊時卡住 LED/電壓監察/IMU 等其他工作。
 
-// ===== 電壓檢查函式 =====
-void initVoltageCheck() {
-  pinMode(VOLTAGE_PIN, INPUT_ANALOG);
-  voltageData.currentVoltage = 0.0;
-  voltageData.minVoltage = 99.0;
-  voltageData.maxVoltage = 0.0;
-  voltageData.lastCheckTime = 0;
-  voltageData.warningActive = false;
-  voltageData.shutdownInitiated = false;
-}
+#define PMA_PKT_MAX_LEN 100  // 已實測 10 個真實檔案 LEN 上限 80，留少少餘量
+#define PMA_DEBUG_TRACK_ID 0x02  // 診斷用：追蹤呢個 pmaID 嘅角度值(0x02=HV1/右肩ピッチ)，
+                                  // 方便同你郁緊嘅 Unity slider 直接對照
 
-float readBatteryVoltage() {
-  uint32_t sum = 0;
-  for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
-    sum += analogRead(VOLTAGE_PIN);
-    // [FIX 4] 移除 delay(1)：STM32 ADC 夠快，唔需要等待，省 10ms 阻塞
-  }
-  float average = (float)sum / VOLTAGE_SAMPLES;
-  float voltageAtPin = (average / 4095.0) * 3.3;
-  float actualVoltage = voltageAtPin * VOLTAGE_DIVIDER_RATIO;
-  return actualVoltage;
-}
+enum PmaRecvState { PMA_RECV_IDLE, PMA_RECV_BODY };
+PmaRecvState pmaRecvState = PMA_RECV_IDLE;
+uint8_t pmaPktBuf[PMA_PKT_MAX_LEN];
+uint8_t pmaPktLen = 0;      // 呢個封包嘅目標長度（第一個 byte）
+uint8_t pmaPktFilled = 0;   // 已經收到幾多個 byte（含 LEN 自己）
+unsigned long lastPmaChecksumWarnMs = 0;  // (保留，暫未使用)
+unsigned long pmaPacketOkCount = 0;    // 成功執行嘅封包累計數，用 "PMASTAT" 查
+unsigned long pmaPacketFailCount = 0;  // checksum 錯誤嘅封包累計數
+uint8_t pmaLastFailLen = 0;      // 最後一個失敗封包嘅 LEN
+uint8_t pmaLastFailCmd = 0;      // 最後一個失敗封包嘅 CMD
+uint8_t pmaLastFailCalc = 0;     // 最後一個失敗封包計算出嚟嘅 checksum
+uint8_t pmaLastFailParity = 0;   // 最後一個失敗封包實際收到嘅 parity byte
+uint8_t pmaLastFailBytes[PMA_PKT_MAX_LEN];  // 最後一個失敗封包嘅完整內容快照
+uint8_t pmaLastFailBytesLen = 0;            // 快照實際長度
+unsigned long pmaPktStartMs = 0;            // 開始接收目前封包嘅時間戳
+unsigned long pmaLastFailDurationMs = 0;    // 最後一個失敗封包，由開始到收齊耗用嘅時間
+uint8_t pmaLenHistory[5] = {0};             // 最近 5 次收到嘅 LEN 值
+uint8_t pmaLenHistoryIdx = 0;               // 循環寫入位置
+unsigned long pmaLenientAcceptCount = 0;    // 寬鬆模式接受咗嘅封包數（checksum錯但結構完整）
+uint8_t pmaLastCmd18FirstId = 0;      // 最後一次 0x18 封包，第一隻servo嘅 pmaID
+uint16_t pmaLastCmd18FirstAngle = 0;  // 最後一次 0x18 封包，第一隻servo嘅角度值（原始，未經home offset）
+unsigned long pmaCmd18Count = 0;      // 總共收到幾多次 0x18 封包
 
-void checkVoltage() {
-  unsigned long now = millis();
-  if (now - voltageData.lastCheckTime < VOLTAGE_CHECK_INTERVAL) return;
-
-  voltageData.lastCheckTime = now;
-  voltageData.currentVoltage = readBatteryVoltage();
-
-  if (voltageData.currentVoltage > voltageData.maxVoltage) voltageData.maxVoltage = voltageData.currentVoltage;
-  if (voltageData.currentVoltage < voltageData.minVoltage) voltageData.minVoltage = voltageData.currentVoltage;
-
-  Serial1.print(F("🔋 當前電壓: "));
-  Serial1.print(voltageData.currentVoltage);
-  Serial1.println(F("V"));
-
-  if (voltageData.currentVoltage < VOLTAGE_WARNING) {
-    if (!voltageData.warningActive) {
-      Serial1.print(F("\n⚠️ 低電壓警告: "));
-      Serial1.print(voltageData.currentVoltage);
-      Serial1.println(F("V"));
-      voltageData.warningActive = true;
+// 由 pma-style servoID 轉做角度，經 applyHomeOffset 轉換基準後送出。
+// baselineCenter 用返嗰隻 servo 自己嘅官方中立值（大部分係 7500，
+// 但肩ロールR/L 例外），咁樣先可以令 Unity/.pma 送嚟嘅絕對角度正確
+// 對應到你自己實測嘅 homePosition，唔會因為兩者基準唔一致而錯位。
+//
+// 官方協議規定 angle==0（即 raw bytes 00 00）係「脫力」特殊指令，唔係
+// 正常角度值——如果照樣做 offset 轉換，會將 targetAngle 拉去極端值，
+// 25 隻 servo 各自撞向自己極限，造成「保持⇔脫力」一撳落去全身扭曲嘅
+// 結果。呢度要優先攔截呢個特殊值。
+static void pmaApplyServoAngle(uint8_t pmaId, uint16_t rawAngle) {
+  ServoInfo *servo = findServoByPmaId(pmaId);
+  if (!servo) return;  // 未定義/未駁線嘅 ID 直接跳過
+  if (rawAngle == 0) {
+    if (servo->enabled) {
+      servo->icsPort->setFree(servo->servoID);
     }
-    setLEDRed();
-    if (voltageData.currentVoltage < 8.5 && !voltageData.shutdownInitiated) {
-      Serial1.println(F("\n🚨 電壓過低！自動關機..."));
-      voltageData.shutdownInitiated = true;
-      walkGen.safeStop();
-      setLEDOff();
-      while (1) delay(1000);
-    }
-  } else {
-    if (voltageData.warningActive) {
-      Serial1.println(F("✅ 電壓恢復正常"));
-      voltageData.warningActive = false;
-    }
-    if (!voltageData.warningActive) {
-      setLEDBlue();
-    }
-  }
-}
-
-// ===== LED 控制 =====
-void initLED() {
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_BLUE_PIN, OUTPUT);
-  setLEDOff();
-}
-
-void setLEDRed() {
-  digitalWrite(LED_RED_PIN, HIGH);
-  digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_BLUE_PIN, LOW);
-}
-
-void setLEDGreen() {
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, HIGH);
-  digitalWrite(LED_BLUE_PIN, LOW);
-}
-
-void setLEDBlue() {
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_BLUE_PIN, HIGH);
-}
-
-void setLEDPurple() {
-  digitalWrite(LED_RED_PIN, HIGH);
-  digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_BLUE_PIN, HIGH);
-}
-
-void setLEDOff() {
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_BLUE_PIN, LOW);
-}
-
-void breathLED(int pin, int speed) {
-  for (int brightness = 0; brightness <= 255; brightness++) {
-    analogWrite(pin, brightness);
-    delay(speed);
-  }
-  for (int brightness = 255; brightness >= 0; brightness--) {
-    analogWrite(pin, brightness);
-    delay(speed);
-  }
-}
-
-// ===== MPU6050 函式 =====
-void writeMPU6050Reg(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(reg);
-  Wire.write(value);
-  Wire.endTransmission();
-}
-
-uint8_t readMPU6050Reg(uint8_t reg) {
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(reg);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU6050_ADDR, (uint8_t)1);
-  if (Wire.available()) return Wire.read();
-  return 0;
-}
-
-int16_t readMPU6050Word(uint8_t regH) {
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(regH);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU6050_ADDR, (uint8_t)2);
-  if (Wire.available() >= 2) return (Wire.read() << 8) | Wire.read();
-  return 0;
-}
-
-void initMPU6050() {
-  Wire.begin();
-  Wire.setClock(400000);
-
-  uint8_t whoami = readMPU6050Reg(0x75);
-
-  if (whoami != 0x68) {
-    Serial1.println(F("MPU6050 連接失敗！"));
-    mpuData.calibrated = false;
     return;
   }
-
-  writeMPU6050Reg(0x6B, 0x00);
-  delay(100);
-
-  writeMPU6050Reg(0x1B, 0x00);
-  writeMPU6050Reg(0x1C, 0x00);
-  writeMPU6050Reg(0x1A, 0x03);
-  writeMPU6050Reg(0x19, 0x07);
-  Serial1.println(F("MPU6050 初始化成功"));
-  mpuData.calibrated = false;
+  uint16_t safeAngle = applyHomeOffset(servo, rawAngle, servo->baselineCenter);
+  safeSetPos(servo, safeAngle);
+  servo->currentTunePos = safeAngle;
 }
 
-void calibrateGyro(int samples) {
-  Serial1.println(F("校準陀螺儀，請保持靜止..."));
-
-  int32_t sumGx = 0, sumGy = 0, sumGz = 0;
-
-  for (int i = 0; i < samples; i++) {
-    sumGx += readMPU6050Word(0x43);
-    sumGy += readMPU6050Word(0x45);
-    sumGz += readMPU6050Word(0x47);
-    delay(5);
+// 0x19：payload[0]=00(SPEED)|10(STRETCH)，之後 {pmaID,值} 一路重複
+static void pmaHandleCmd19(const uint8_t *payload, uint8_t payloadLen) {
+  if (payloadLen < 1) return;
+  uint8_t subType = payload[0];
+  for (uint8_t i = 1; i + 1 < payloadLen; i += 2) {
+    uint8_t pmaId = payload[i];
+    uint8_t value = payload[i + 1];
+    ServoInfo *servo = findServoByPmaId(pmaId);
+    if (!servo) continue;
+    if (subType == 0x00) {
+      safeSetSpd(servo, value);
+      servo->currentSpeed = value;
+    } else if (subType == 0x10) {
+      safeSetStrc(servo, value);
+    }
   }
-
-  mpuData.gyroXOffset = sumGx / samples;
-  mpuData.gyroYOffset = sumGy / samples;
-  mpuData.gyroZOffset = sumGz / samples;
-  mpuData.calibrated = true;
-
-  Serial1.println(F("校準完成"));
 }
 
-bool readMPU6050() {
-  if (!mpuData.calibrated) return false;
-
-  uint8_t buffer[14];
-
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-
-  Wire.requestFrom(MPU6050_ADDR, (uint8_t)14);
-  if (Wire.available() < 14) return false;
-
-  for (int i = 0; i < 14; i++) {
-    buffer[i] = Wire.read();
+// 0x18：payload[0]=00(保留), payload[1]=SPD, 之後 {pmaID,LO,HI} 一路重複
+// 收到呢個指令即係外部（PC/App）開始接管動作，同 table_walk 嘅
+// 持續性步行輸出互斥，故此先確保 table_walk 已停，避免兩者同時
+// safeSetPos() 打交叉。
+static void pmaHandleCmd18(const uint8_t *payload, uint8_t payloadLen) {
+  if (payloadLen < 2) return;
+  if (tableWalkIsWalking()) {
+    tw_walker_init(&tableWalker);  // 強制歸零、即時停，唔送 home 指令
+                                     // （.pma 封包自己會送角度，唔需要多餘一次 home）
   }
-
-  int16_t ax_raw = (buffer[0] << 8) | buffer[1];
-  int16_t ay_raw = (buffer[2] << 8) | buffer[3];
-  int16_t az_raw = (buffer[4] << 8) | buffer[5];
-  int16_t temp_raw = (buffer[6] << 8) | buffer[7];
-
-  int16_t gx_raw = (buffer[8] << 8) | buffer[9];
-  int16_t gy_raw = (buffer[10] << 8) | buffer[11];
-  int16_t gz_raw = (buffer[12] << 8) | buffer[13];
-
-  mpuData.ax = ax_raw / 16384.0f;
-  mpuData.ay = ay_raw / 16384.0f;
-  mpuData.az = az_raw / 16384.0f;
-  mpuData.temperature = (temp_raw / 340.0f) + 36.53f;
-
-  mpuData.gx = (gx_raw - mpuData.gyroXOffset) / 131.0f;
-  mpuData.gy = (gy_raw - mpuData.gyroYOffset) / 131.0f;
-  mpuData.gz = (gz_raw - mpuData.gyroZOffset) / 131.0f;
-
-  return true;
+  pmaCmd18Count++;
+  for (uint8_t i = 2; i + 2 < payloadLen; i += 3) {
+    uint8_t pmaId = payload[i];
+    uint16_t lo = payload[i + 1];
+    uint16_t hi = payload[i + 2];
+    uint16_t angle = (hi << 8) | lo;
+    if (pmaId == PMA_DEBUG_TRACK_ID) {  // 追蹤指定嘅 pmaID，方便對照你郁緊嗰條 slider
+      pmaLastCmd18FirstId = pmaId;
+      pmaLastCmd18FirstAngle = angle;
+    }
+    pmaApplyServoAngle(pmaId, angle);
+  }
 }
+
+// 執行一個已經收齊、通過 checksum 驗證嘅封包
+static void pmaExecutePacket(const uint8_t *pkt, uint8_t len) {
+  uint8_t cmd = pkt[1];
+  const uint8_t *payload = pkt + 2;
+  uint8_t payloadLen = len - 3;  // 扣埋 LEN(1)+CMD(1)+checksum(1)
+
+  if (cmd == 0x18) {
+    pmaHandleCmd18(payload, payloadLen);
+  } else if (cmd == 0x19) {
+    pmaHandleCmd19(payload, payloadLen);
+  }
+  // 其他 command：已知但唔影響郁動作，冇對應處理，略過
+}
+
+// 由 loop() 每次 iteration call 一次；逐 byte 儲入 buffer，
+// 儲夠一個完整封包先驗 checksum 同執行，然後重置去等下一個封包。
+void pmaReceiveUpdate() {
+  while (Serial1.available() > 0) {
+    uint8_t b = Serial1.peek();
+
+    if (pmaRecvState == PMA_RECV_IDLE) {
+      // 判斷呢個 byte 係咪合理嘅 .pma 封包 LEN：要睇多一個 byte（CMD）
+      // 先可以確定，因為單靠一個 byte 嘅數值範圍會同 ASCII 指令撞埋。
+      //
+      // 特殊例外：如果呢個 byte 本身就係 '\n'，一定要即刻處理，唔可以
+      // 等第二個 byte 先算——因為 '\n' 代表一句 ASCII 指令已經完整，
+      // 如果卡住唔處理，佢會一直等到 *下一次* send 嘅第一個字元一齊
+      // 到達先被消耗，造成「指令要打兩次先有反應」。
+      //
+      // 但除咗 '\n' 之外嘅其他情況（例如 binary 封包啱啱好逐 byte
+      // 到達，第一個 byte 啱啱好係 LEN），唔可以貿然假設佢係 ASCII
+      // 就即刻消耗咗——試過呢種寫法，會令逐 byte 到達嘅 0x18 封包
+      // 成個都被拆散當 ASCII 字元吞晒，令 Unity/PC 端完全冧唔到任何
+      // binary 封包。所以除 '\n' 外一律維持保守，等夠 2 個 byte 先判斷。
+      if (Serial1.available() < 2) {
+        if (b == '\n') {
+          Serial1.read();
+          inputBuffer += '\n';
+          processCommand(inputBuffer);
+          inputBuffer = "";
+        }
+        return;  // 唔係 '\n'：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
+      }
+      uint8_t peekLen = b;
+      // peek 唔到第二個 byte，要 read 咗第一個先，用 index 0 存住
+      Serial1.read();
+      pmaPktBuf[0] = peekLen;
+      pmaPktFilled = 1;
+
+      uint8_t secondByte = Serial1.peek();
+      // 用已知 CMD 集合而唔淨係 "< 0x20"，避免好似 "?\n" 呢類短
+      // ASCII 指令（第二個 byte 係 \n=0x0A，都 < 0x20）被誤判做 binary 封包。
+      // 集合根據解析 spreadsheet「一覧表」入面「直接」欄=〇 嘅指令整理：
+      // 01=內部變數查詢(電量等) 02=迴圈起點 04=toggle 05=停止
+      // 07=迴圈終點 15/17=PMA專用 18=多軸角度 19=Speed/Stretch
+      // 1C=Flash dump 1E=LED控制 1F=播放已存動作
+      // 漏咗 0x01 曾經令 Unity 嘅 RequestBatteryRemain()（07 01 00 02
+      // 00 02 06，每 10 秒定時發一次）被誤判做 ASCII 字元塞入
+      // inputBuffer，污染咗接收狀態，係之前「連續送信一開就冇反應」嘅
+      // 根本原因。
+      bool isPmaCmd = (secondByte == 0x01 || secondByte == 0x02 ||
+                       secondByte == 0x04 || secondByte == 0x05 ||
+                       secondByte == 0x07 || secondByte == 0x15 ||
+                       secondByte == 0x17 || secondByte == 0x18 ||
+                       secondByte == 0x19 || secondByte == 0x1C ||
+                       secondByte == 0x1E || secondByte == 0x1F);
+      bool looksLikePmaPacket = isPmaCmd && (peekLen >= 3 && peekLen <= PMA_PKT_MAX_LEN);
+
+      if (looksLikePmaPacket) {
+        pmaPktLen = peekLen;
+        pmaRecvState = PMA_RECV_BODY;
+        pmaPktStartMs = millis();  // 記低開始收呢個封包嘅時間，診斷傳輸節奏用
+        // 記低最近 5 次收到嘅 LEN 值，方便睇係咪每次都固定同一個數值
+        // （固定 = Unity 本身送緊呢個長度；隨機/多變 = 傳輸過程有損失）
+        pmaLenHistory[pmaLenHistoryIdx % 5] = peekLen;
+        pmaLenHistoryIdx++;
+      } else {
+        // 唔係 binary 封包，peekLen 呢個 byte 其實係普通 ASCII 字元
+        char c = (char)peekLen;
+        inputBuffer += c;
+        if (c == '\n') {
+          processCommand(inputBuffer);
+          inputBuffer = "";
+        }
+        pmaPktFilled = 0;  // 復位，冇進入 binary 模式
+      }
+    } else {  // PMA_RECV_BODY
+      pmaPktBuf[pmaPktFilled] = Serial1.read();
+      pmaPktFilled++;
+
+      if (pmaPktFilled >= pmaPktLen) {
+        // 收齊一個封包，驗 checksum
+        uint8_t xorCalc = pmaPktLen;
+        for (uint8_t i = 1; i < pmaPktLen - 1; i++) {
+          xorCalc ^= pmaPktBuf[i];
+        }
+        uint8_t parity = pmaPktBuf[pmaPktLen - 1];
+
+        // 寬鬆驗證：已經反覆證實 Unity（kazz 版 continuousMode）本身
+        // 冇正確計算 checksum，一律送出 0x00 佔位值，並非傳輸損毀
+        // ——多次觀察 pmaLenHistory 全部固定 68，payload 內容完全自洽
+        // （21 隻 servo，全部係已知合理 ID，數值都喺正常角度範圍），
+        // 純粹係 Unity 端限制。為咗實際可用，容許 recv==0x00 且
+        // payload 結構完整（扣除 LEN/CMD/保留位/SPD/checksum 之後,
+        // 剩餘 byte 啱啱好整除 3）嘅封包照樣執行，其餘 checksum 錯誤
+        // 仍然拒絕。
+        bool structurallyValid = (pmaPktLen >= 8) && ((pmaPktLen - 5) % 3 == 0);
+        bool passedChecksum = (xorCalc == parity);
+        bool passedLenientMode = (parity == 0x00) && structurallyValid;
+
+        if (passedChecksum || passedLenientMode) {
+          pmaExecutePacket(pmaPktBuf, pmaPktLen);
+          pmaPacketOkCount++;
+          if (!passedChecksum) pmaLenientAcceptCount++;
+        } else {
+          // 唔即時 print——Serial1.print 阻塞式送出，成句 UTF-8 warning
+          // 要幾十毫秒，同 continuousMode 高頻封包、電壓監察等其他
+          // Serial1.print 撞埋一齊時，阻塞時間疊加，令 RX buffer 嘅
+          // 下一個封包到達期間被覆蓋/延誤，造成「一錯就雪崩、成串
+          // checksum 錯」。改為淨係計數 + 保留最後一個失敗封包嘅內容
+          // 快照，用 "PMASTAT" 指令按需查詢，唔喺 loop() 入面即時噴。
+          pmaPacketFailCount++;
+          pmaLastFailLen = pmaPktLen;
+          pmaLastFailCmd = pmaPktBuf[1];
+          pmaLastFailCalc = xorCalc;
+          pmaLastFailParity = parity;
+          pmaLastFailBytesLen = pmaPktLen;
+          pmaLastFailDurationMs = millis() - pmaPktStartMs;
+          for (uint8_t d = 0; d < pmaPktLen; d++) {
+            pmaLastFailBytes[d] = pmaPktBuf[d];
+          }
+        }
+
+        pmaRecvState = PMA_RECV_IDLE;
+        pmaPktFilled = 0;
+      }
+    }
+  }
+}
+
 
 // ===== 初始化伺服 =====
 void initServos() {
@@ -1494,105 +546,144 @@ ServoInfo *findServoByBinaryID(uint8_t binaryID) {
   return NULL;
 }
 
-// ===== 處理官方 ICS Binary 協議 =====
-void processOfficialBinary() {
-  while (Serial1.available() >= 3) {
-    uint8_t firstByte = Serial1.peek();
-
-    bool isValidICS = false;
-    uint8_t cmdType = (firstByte >> 6) & 0x03;
-
-    if (cmdType == 0b10 || cmdType == 0b11) isValidICS = true;
-    else if ((firstByte & 0xE0) == 0xA0) isValidICS = true;
-    else if (firstByte == 0xFF) isValidICS = true;
-
-    if (!isValidICS) break;
-
-    uint8_t cmd = Serial1.read();
-    if (Serial1.available() < 2) break;
-    uint8_t byte2 = Serial1.read();
-    uint8_t byte3 = Serial1.read();
-
-    cmdType = (cmd >> 6) & 0x03;
-    uint8_t id = cmd & 0x1F;
-
-    ServoInfo *servo = findServoByBinaryID(id);
-    if (!servo) continue;
-
-    switch (cmdType) {
-      case 0b10:
-        {
-          uint16_t pos = (byte2 << 7) | byte3;
-          if (pos >= servo->minAngle && pos <= servo->maxAngle) {
-            servo->icsPort->setPos(servo->servoID, pos);
-            servo->currentTunePos = pos;
-          }
-        }
-        break;
-
-      case 0b11:
-        {
-          uint8_t paramType = byte2;
-          uint8_t value = byte3;
-          switch (paramType) {
-            case 0x01:
-              if (value >= 1 && value <= 127) servo->icsPort->setStrc(servo->servoID, value);
-              break;
-            case 0x02:
-              if (value >= 1 && value <= 127) {
-                servo->icsPort->setSpd(servo->servoID, value);
-                servo->currentSpeed = value;
-              }
-              break;
-            case 0x03:
-              if (value >= 1 && value <= 63) servo->icsPort->setCur(servo->servoID, value);
-              break;
-            case 0x04:
-              if (value >= 1 && value <= 127) servo->icsPort->setTmp(servo->servoID, value);
-              break;
-          }
-        }
-        break;
-
-      case 0b01:
-        {
-          uint8_t readType = byte2;
-          int result = ICS_FALSE;
-          switch (readType) {
-            case 0x01: result = servo->icsPort->getStrc(servo->servoID); break;
-            case 0x02: result = servo->icsPort->getSpd(servo->servoID); break;
-            case 0x03: result = servo->icsPort->getCur(servo->servoID); break;
-            case 0x04: result = servo->icsPort->getTmp(servo->servoID); break;
-            case 0x05: result = servo->icsPort->getPos(servo->servoID); break;
-          }
-          if (result != ICS_FALSE) {
-            uint8_t reply[3];
-            reply[0] = 0x80 | id;
-            reply[1] = (result >> 7) & 0x7F;
-            reply[2] = result & 0x7F;
-            Serial1.write(reply, 3);
-          }
-        }
-        break;
+// 失敗時 return false；setPos/setSpd 會 retry 一次（半雙工單線偶發 race condition）
+bool safeSetPos(ServoInfo *servo, uint16_t pos) {
+  if (!servo) return false;
+  if (!servo->enabled) return true;
+  lastActivityMs = millis();
+  isFreeMode = false;
+  int result = servo->icsPort->setPos(servo->servoID, pos);
+  if (result == ICS_FALSE) {
+    result = servo->icsPort->setPos(servo->servoID, pos);
+    if (result == ICS_FALSE) {
+      return false;
     }
   }
+  return true;
+}
+
+bool safeSetSpd(ServoInfo *servo, uint8_t spd) {
+  if (!servo) return false;
+  if (!servo->enabled) return true;
+  if (spd < 1 || spd > 127) {
+    Serial1.print(F("⚠️ setSpd 範圍錯誤 (1-127): "));
+    Serial1.print(servo->name);
+    Serial1.print(F(" spd="));
+    Serial1.println(spd);
+    return false;
+  }
+  int result = servo->icsPort->setSpd(servo->servoID, spd);
+  if (result == ICS_FALSE) {
+    result = servo->icsPort->setSpd(servo->servoID, spd);  // retry 一次
+    if (result == ICS_FALSE) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool safeSetStrc(ServoInfo *servo, uint8_t strc) {
+  if (!servo) return false;
+  if (strc < 1 || strc > 127) {
+    Serial1.print(F("⚠️ setStrc 範圍錯誤 (1-127): "));
+    Serial1.print(servo->name);
+    Serial1.print(F(" strc="));
+    Serial1.println(strc);
+    return false;
+  }
+  int result = servo->icsPort->setStrc(servo->servoID, strc);
+  return (result != ICS_FALSE);
+}
+
+bool safeSetCur(ServoInfo *servo, uint8_t curlim) {
+  if (!servo) return false;
+  if (curlim < 1 || curlim > 63) {
+    Serial1.print(F("⚠️ setCur 範圍錯誤 (1-63): "));
+    Serial1.print(servo->name);
+    Serial1.print(F(" curlim="));
+    Serial1.println(curlim);
+    return false;
+  }
+  int result = servo->icsPort->setCur(servo->servoID, curlim);
+  return (result != ICS_FALSE);
+}
+
+bool safeSetTmp(ServoInfo *servo, uint8_t tmplim) {
+  if (!servo) return false;
+  if (tmplim < 1 || tmplim > 127) {
+    Serial1.print(F("⚠️ setTmp 範圍錯誤 (1-127): "));
+    Serial1.print(servo->name);
+    Serial1.print(F(" tmplim="));
+    Serial1.println(tmplim);
+    return false;
+  }
+  int result = servo->icsPort->setTmp(servo->servoID, tmplim);
+  return (result != ICS_FALSE);
+}
+
+int setStrc(byte id, unsigned int strc) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->setStrc(servo->servoID, strc);
+}
+
+int setSpd(byte id, unsigned int spd) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->setSpd(servo->servoID, spd);
+}
+
+int setCur(byte id, unsigned int curlim) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->setCur(servo->servoID, curlim);
+}
+
+int setTmp(byte id, unsigned int tmplim) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->setTmp(servo->servoID, tmplim);
+}
+
+int getStrc(byte id) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->getStrc(servo->servoID);
+}
+
+int getSpd(byte id) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->getSpd(servo->servoID);
+}
+
+int getCur(byte id) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->getCur(servo->servoID);
+}
+
+int getTmp(byte id) {
+  ServoInfo *servo = findServoByBinaryID(id);
+  if (!servo) return ICS_FALSE;
+  return servo->icsPort->getTmp(servo->servoID);
 }
 
 // ===== 移動到 Home Point =====
 void moveAllServosToHome() {
-  Serial1.println(F("\n🚀 所有伺服回家，速度64"));
+  Serial1.println(F("\n🚀 所有伺服回家，速度32"));
 
   for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
     ServoInfo *s = &servoList[i];
-    s->icsPort->setSpd(s->servoID, 64);
-    s->currentSpeed = 64;
+    safeSetSpd(s, 32);
+    s->currentSpeed = 32;
   }
 
   delay(5);
 
   for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
     ServoInfo *s = &servoList[i];
-    s->icsPort->setPos(s->servoID, s->homePosition);
+    safeSetPos(s, s->homePosition);
     s->currentTunePos = s->homePosition;
   }
 
@@ -1616,6 +707,7 @@ bool processFreeCommand(String cmd) {
       s->icsPort->setFree(s->servoID);
       delay(2);
     }
+    isFreeMode = true;
     Serial1.println(F("✅ 所有伺服已脫力"));
     return true;
   }
@@ -1658,7 +750,7 @@ bool processMultiCommand(String cmd) {
   if (firstSpace <= 0) return false;
 
   int speed = params.substring(0, firstSpace).toInt();
-  if (speed < 0) speed = 0;
+  if (speed < 1) speed = 1;      // IcsBaseClass::MIN_1 = 1，唔係 0
   if (speed > 127) speed = 127;
 
   String rest = params.substring(firstSpace + 1);
@@ -1698,7 +790,7 @@ bool processMultiCommand(String cmd) {
     ServoInfo *servo = findServoByBinaryID(binaryId);
 
     if (servo != NULL) {
-      servo->icsPort->setSpd(servo->servoID, speed);
+      safeSetSpd(servo, speed);
       servo->currentSpeed = speed;
     }
 
@@ -1732,7 +824,7 @@ bool processMultiCommand(String cmd) {
 
     if (servo != NULL) {
       if (angle >= servo->minAngle && angle <= servo->maxAngle) {
-        servo->icsPort->setPos(servo->servoID, angle);
+        safeSetPos(servo, angle);
         servo->currentTunePos = angle;
       }
     }
@@ -1777,14 +869,14 @@ bool processASCIICommand(String cmd) {
 
             if (fourthSpace > 0) {
               int speed = cmd.substring(fourthSpace + 1).toInt();
-              if (speed < 0) speed = 0;
+              if (speed < 1) speed = 1;      // IcsBaseClass::MIN_1 = 1，唔係 0
               if (speed > 127) speed = 127;
 
-              servo->icsPort->setSpd(servo->servoID, speed);
+              safeSetSpd(servo, speed);
               servo->currentSpeed = speed;
             }
 
-            servo->icsPort->setPos(servo->servoID, angle);
+            safeSetPos(servo, angle);
             servo->currentTunePos = angle;
 
             setLEDGreen();
@@ -1807,10 +899,13 @@ bool processASCIICommand(String cmd) {
   if (cmd.startsWith("? ")) {
     int firstSpace = cmd.indexOf(' ');
     int secondSpace = cmd.indexOf(' ', firstSpace + 1);
+    int thirdSpace = cmd.indexOf(' ', secondSpace + 1);
 
     if (firstSpace > 0 && secondSpace > 0) {
       String group = cmd.substring(firstSpace + 1, secondSpace);
-      int binaryId = cmd.substring(secondSpace + 1).toInt();
+      int binaryId = cmd.substring(secondSpace + 1, (thirdSpace > 0 ? thirdSpace : cmd.length())).toInt();
+      String field = (thirdSpace > 0) ? cmd.substring(thirdSpace + 1) : "";
+      field.trim();
 
       group.toUpperCase();
 
@@ -1820,6 +915,36 @@ bool processASCIICommand(String cmd) {
         bool groupMatch = (group == "MV" && !servo->isHV) || (group == "HV" && servo->isHV);
 
         if (groupMatch) {
+          if (!servo->enabled) {
+            Serial1.print(F("⚠️ "));
+            Serial1.print(servo->name);
+            Serial1.println(F(" 未駁線 (enabled=false)，略過"));
+            return true;
+          }
+
+          if (field == "STRC" || field == "SPD" || field == "CUR" || field == "TMP") {
+            int result = ICS_FALSE;
+            const char *label = "";
+            if (field == "STRC") { result = getStrc(binaryId); label = "Stretch"; }
+            else if (field == "SPD")  { result = getSpd(binaryId);  label = "Speed"; }
+            else if (field == "CUR")  { result = getCur(binaryId);  label = "電流上限"; }
+            else if (field == "TMP")  { result = getTmp(binaryId);  label = "溫度上限"; }
+
+            if (result != ICS_FALSE) {
+              Serial1.print(group);
+              Serial1.print(F(" ID "));
+              Serial1.print(binaryId);
+              Serial1.print(F(" "));
+              Serial1.print(label);
+              Serial1.print(F(": "));
+              Serial1.println(result);
+            } else {
+              Serial1.println(F("❌ 讀取失敗（通訊錯誤）"));
+            }
+            return true;
+          }
+
+          // 冇第4個參數：沿用原本行為，查詢目前角度
           int pos = servo->icsPort->setPos(servo->servoID, servo->currentTunePos);
           if (pos != ICS_FALSE) {
             Serial1.print(group);
@@ -1840,133 +965,6 @@ bool processASCIICommand(String cmd) {
   return false;
 }
 
-// ===== 執行 Batch 指令 =====
-void executeBatchCommands() {
-  if (batchIndex == 0) return;
-
-  batchBuffer[batchIndex] = '\0';
-
-  char *line = strtok(batchBuffer, "\n");
-  while (line != NULL) {
-    char *end = line + strlen(line) - 1;
-    while (end >= line && (*end == '\r' || *end == '\n')) {
-      *end-- = '\0';
-    }
-
-    if (strlen(line) > 0) {
-      String cmd = String(line);
-      if (!processASCIICommand(cmd)) {
-        processCommand(cmd);
-      }
-    }
-
-    line = strtok(NULL, "\n");
-  }
-
-  batchIndex = 0;
-  setLEDGreen();
-  delay(50);
-  setLEDBlue();
-}
-
-// ===== 三個 SHAKE 版本 =====
-void actionShakeBox_ASCII() {
-  Serial1.println(F("\n📦 [ASCII] Shake a Box"));
-
-  processMultiCommand("S MULTI 37 6 HV2 6538 MV5 5247 MV9 6763 HV1 8362 MV4 9753 MV8 8237");
-  delay(700);
-
-  for (int i = 0; i < 8; i++) {
-    if (i % 2 == 0) {
-      processMultiCommand("S MULTI 46 2 HV2 5848 HV1 9052");
-    } else {
-      processMultiCommand("S MULTI 46 2 HV2 6538 HV1 8362");
-    }
-    delay(300);
-  }
-
-  Serial1.println(F("✅ [ASCII] 完成"));
-}
-
-void actionShakeBox_CPP() {
-  Serial1.println(F("\n📦 [C++] Shake a Box"));
-
-  icsHV.setSpd(2, 37);
-  icsMV.setSpd(5, 37);
-  icsMV.setSpd(9, 37);
-  icsHV.setSpd(1, 37);
-  icsMV.setSpd(4, 37);
-  icsMV.setSpd(8, 37);
-  delay(2);
-
-  icsHV.setPos(2, 6538);
-  icsMV.setPos(5, 5247);
-  icsMV.setPos(9, 6763);
-  icsHV.setPos(1, 8362);
-  icsMV.setPos(4, 9753);
-  icsMV.setPos(8, 8237);
-
-  delay(700);
-
-  for (int i = 0; i < 8; i++) {
-    if (i % 2 == 0) {
-      icsHV.setSpd(2, 46);
-      icsHV.setSpd(1, 46);
-      delay(2);
-      icsHV.setPos(2, 5848);
-      icsHV.setPos(1, 9052);
-    } else {
-      icsHV.setSpd(2, 46);
-      icsHV.setSpd(1, 46);
-      delay(2);
-      icsHV.setPos(2, 6538);
-      icsHV.setPos(1, 8362);
-    }
-    delay(300);
-  }
-
-  Serial1.println(F("✅ [C++] 完成"));
-}
-
-void actionShakeBox_ICS() {
-  Serial1.println(F("\n📦 [ICS] Shake a Box"));
-  icsHV.setSpd(2, 37);
-  icsMV.setSpd(5, 37);
-  icsMV.setSpd(9, 37);
-  icsHV.setSpd(1, 37);
-  icsMV.setSpd(4, 37);
-  icsMV.setSpd(8, 37);
-  delay(5);
-
-  icsHV.setPos(2, 6538);
-  icsMV.setPos(5, 5247);
-  icsMV.setPos(9, 6763);
-  icsHV.setPos(1, 8362);
-  icsMV.setPos(4, 9753);
-  icsMV.setPos(8, 8237);
-
-  delay(700);
-
-  for (int i = 0; i < 8; i++) {
-    if (i % 2 == 0) {
-      icsHV.setSpd(2, 46);
-      icsHV.setSpd(1, 46);
-      delay(2);
-      icsHV.setPos(2, 5848);
-      icsHV.setPos(1, 9052);
-    } else {
-      icsHV.setSpd(2, 46);
-      icsHV.setSpd(1, 46);
-      delay(2);
-      icsHV.setPos(2, 6538);
-      icsHV.setPos(1, 8362);
-    }
-    delay(300);
-  }
-
-  Serial1.println(F("✅ [ICS] 完成"));
-}
-
 // ===== setup() =====
 void setup() {
   initLED();
@@ -1977,148 +975,145 @@ void setup() {
 
   initVoltageCheck();
 
-  // [FIX 5] 立即初始化 servo 並發送 home 指令
-  // servo 收到指令後自行按設定速度移動，唔需要 MCU 等待
-  // 之後嘅 LED 動畫、MPU 校準等可與 servo 移動同步進行
+  // 立即初始化 servo 並發送 home 指令；servo 收到指令後自行按設定速度移動，
+  // 唔需要 MCU 等待，之後嘅 LED 動畫等可與 servo 移動同步進行
   Serial1.println(F("\n========================================"));
-  Serial1.println(F("プリメイドAI - IK 步行 + Self Balancing"));
+  Serial1.println(F("プリメイドAI - table_walk 步行"));
   Serial1.println(F("========================================"));
+
+  // ===== table_walk 步行系統初始化 =====
+  tw_walker_init(&tableWalker);
+  tw_params_init(&tableWalkParams);
+  lastWalkTickMs = millis();
 
   Serial1.print(F("\n初始化伺服..."));
   initServos();
   Serial1.println(F("完成"));
 
+  Serial1.print(F("設定伺服速度 (HV="));
+  Serial1.print(DEFAULT_SPEED_HV);
+  Serial1.print(F(", MV="));
+  Serial1.print(DEFAULT_SPEED_MV);
+  Serial1.print(F(")..."));
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    int spdVal = servoList[i].isHV ? DEFAULT_SPEED_HV : DEFAULT_SPEED_MV;
+    safeSetSpd(&servoList[i], spdVal);
+  }
+  Serial1.println(F("完成"));
+
+  Serial1.print(F("設定伺服 Stretch (HV="));
+  Serial1.print(DEFAULT_STRETCH_HV);
+  Serial1.print(F(", MV="));
+  Serial1.print(DEFAULT_STRETCH_MV);
+  Serial1.print(F(")..."));
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    int strcVal = servoList[i].isHV ? DEFAULT_STRETCH_HV : DEFAULT_STRETCH_MV;
+    safeSetStrc(&servoList[i], strcVal);
+  }
+  Serial1.println(F("完成"));
+
+  Serial1.print(F("設定伺服電流上限 (HV="));
+  Serial1.print(DEFAULT_CUR_HV);
+  Serial1.print(F(", MV="));
+  Serial1.print(DEFAULT_CUR_MV);
+  Serial1.print(F(")..."));
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    int curVal = servoList[i].isHV ? DEFAULT_CUR_HV : DEFAULT_CUR_MV;
+    if (!safeSetCur(&servoList[i], curVal)) {
+      Serial1.print(F(" [失敗:")); Serial1.print(servoList[i].name); Serial1.print(F("]"));
+    }
+  }
+  Serial1.println(F(" 完成"));
+
+  Serial1.print(F("設定伺服溫度上限 (HV="));
+  Serial1.print(DEFAULT_TMP_HV);
+  Serial1.print(F(", MV="));
+  Serial1.print(DEFAULT_TMP_MV);
+  Serial1.print(F(")..."));
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    int tmpVal = servoList[i].isHV ? DEFAULT_TMP_HV : DEFAULT_TMP_MV;
+    if (!safeSetTmp(&servoList[i], tmpVal)) {
+      Serial1.print(F(" [失敗:")); Serial1.print(servoList[i].name); Serial1.print(F("]"));
+    }
+  }
+  Serial1.println(F(" 完成"));
+
   Serial1.println(F("\n🏠 發送 home 指令（servo 移動中）..."));
   moveAllServosToHome();
   Serial1.println(F("✅ Servo home 指令已發送，正在移動中..."));
 
-  // servo 移動期間進行 LED 動畫（約 4 秒，servo 同步到位）
-  for (int i = 0; i < 2; i++) {
-    breathLED(LED_RED_PIN, BREATH_SPEED);
-  }
-  setLEDRed();
-
-  Serial1.println(F("\n初始化 MPU6050..."));
-  initMPU6050();
-  calibrateGyro();
-
-  // [新增] 初始化平衡系統
-  balanceSystem.init();
-  delay(200);
-  if (readMPU6050()) {
-    float iP = -atan2f(mpuData.az, mpuData.ay) * RAD_TO_DEG;
-    float iR = atan2f(mpuData.ax, mpuData.ay) * RAD_TO_DEG;
-    balanceSystem.pitchFiltered = iP;
-    balanceSystem.rollFiltered = iR;
-    balanceSystem.targetPitch = iP;
-    balanceSystem.targetRoll = iR;
-    balanceSystem.pitchPID.initMeasurement(iP);
-    balanceSystem.rollPID.initMeasurement(iR);
-    Serial1.print(F("📐 站立目標 Pitch="));
-    Serial1.print(iP, 2);
-    Serial1.print(F("° Roll="));
-    Serial1.print(iR, 2);
-    Serial1.println(F("°"));
-  }
-  Serial1.println(F("✅ 平衡系統初始化完成"));
-  Serial1.println(F("   輸入 'BALANCE CALIBRATE' 重設站立角度"));
-  Serial1.println(F("   輸入 'BALANCE ON' 啟用自平衡"));
-  // [新增] 結束
-
   voltageData.currentVoltage = readBatteryVoltage();
-
   Serial1.print(F("\n🔋 當前電壓: "));
   Serial1.print(voltageData.currentVoltage);
   Serial1.println(F("V"));
 
-  for (int i = 0; i < 2; i++) {
-    breathLED(LED_GREEN_PIN, BREATH_SPEED);
+  // ===== IMU (MPU-6050) 初始化 =====
+  // imuInit() 本身唔需要機身靜止，可以隨時做。
+  // imuCalibrateGyro() 就要機身真係企定咗先準 —— moveAllServosToHome()
+  // 只係發送指令，伺服係自己異步移動過去，MCU 唔會等佢哋到位；
+  // 但唔可以用 delay() 等，會卡住成個 setup()（連 LED 狀態都會卡住）。
+  // 改為非阻塞：呢度淨係 init，實際校正延後到 loop() 用時間戳判斷。
+  Serial1.print(F("\n初始化 IMU (MPU-6050)..."));
+  imuOk = imuInit();
+  if (imuOk) {
+    Serial1.println(F("完成（陀螺零偏將於開機 4 秒後、servo 企定時自動校正）"));
+  } else {
+    Serial1.println(F("⚠️ 未偵測到（WHO_AM_I 驗證失敗），跳過 IMU 功能"));
   }
-  setLEDGreen();
 
-  for (int i = 0; i < 3; i++) {
-    breathLED(LED_BLUE_PIN, BREATH_SPEED);
-  }
-  setLEDBlue();
+  // LED 交返俾 updateActivityLED() 根據 lastActivityMs 自動判斷：
+  // servo 郁緊（moveAllServosToHome() 啱啱觸發咗 safeSetPos()）就顯示
+  // 綠色（忙碌），實際到位、冇再郁就自動喺 300ms 內跳返做青色（待機）—
+  // 唔再用硬編碼嘅幾秒動畫,LED 會真正反映 servo 實際狀態。
+  updateActivityLED();
 
   Serial1.println(F("\n✅ 系統就緒"));
   Serial1.println(F("========================================\n"));
-
-  // [FIX 5] 移除多餘 Wire.begin()，已在 initMPU6050() 內呼叫
 }
 
 // ===== loop() =====
 void loop() {
   checkVoltage();
+  updateActivityLED();
+  updateManualBreathLED();
 
-  // [FIX 6] walk 先行：sendAngles() 會先更新 HV11-14 的 currentTunePos
-  // balance 後行：讀取最新 currentTunePos，統一寫入 HV11-14（單次寫入）
-  walkGen.updateWalk();
-
-  // 固定 10ms 更新平衡系統
-  static unsigned long lastBalanceMs = 0;
-  static unsigned long lastBalance_us = micros();
-  unsigned long now = millis();
-  if (now - lastBalanceMs >= BALANCE_UPDATE_MS) {
-    unsigned long now_us = micros();
-    float dt = (now_us - lastBalance_us) / 1000000.0f;
-    lastBalance_us = now_us;
-    lastBalanceMs = now;
-    if (mpuData.calibrated && readMPU6050()) {
-      // gyroRatePitch = gx，gyroRateRoll = gz
-      // 若方向不對用 BALANCE DEBUG ON 觀察後 BALANCE HVxx INVERT 調整
-      balanceSystem.update(mpuData.ax, mpuData.ay, mpuData.az,
-                           mpuData.gx, mpuData.gz, dt);
-    }
-    // [FIX 6] 統一寫入 HV11-14（walk 或 balance 任一啟用時）
-    // applyBalanceCompensation() 現已支援 balance 停用時直接寫 walk 基準位置
-    if (walkGen.isWalking() || balanceSystem.enabled) {
-      applyBalanceCompensation();
-    }
+  // table_walk 用固定 tick 驅動（唔似原本 WalkGenerator 咁連續時間積分）
+  unsigned long nowTick = millis();
+  if (nowTick - lastWalkTickMs >= TABLE_WALK_TICK_MS) {
+    lastWalkTickMs = nowTick;
+    table_walk_update(&tableWalker, &tableWalkParams);
+    sendTableWalkAngles();
   }
 
-  processOfficialBinary();
+  // .pma / ICS binary 封包接收（非阻塞，逐 byte 儲，收齊即行）
+  pmaReceiveUpdate();
 
-  while (Serial1.available()) {
-    char c = Serial1.read();
-    lastCharTime = millis();
-
-    if (!batchMode) {
-      batchMode = true;
-      batchIndex = 0;
-      if (batchIndex < BATCH_BUFFER_SIZE - 1) {
-        batchBuffer[batchIndex++] = c;
-      }
-    } else {
-      if (batchIndex < BATCH_BUFFER_SIZE - 1) {
-        batchBuffer[batchIndex++] = c;
-      }
-    }
-
-    inputBuffer += c;
-
-    if (c == '\n') {
-      processCommand(inputBuffer);
-      inputBuffer = "";
-    }
+  // IMU 開機自動校正（非阻塞）：等開機滿 IMU_AUTO_CAL_DELAY_MS（servo
+  // 應已行到 home 企定）先做一次，唔用 delay() 卡住 loop()，LED/電壓/
+  // 伺服通信全部正常運作，唔會再出現「LED 卡住幾秒」嘅問題。
+  // 校正嗰刻閃白燈 + 清晰 log，方便唔開 Serial Monitor 都睇到發生咗。
+  if (imuOk && !imuGyroCalibrated && millis() >= IMU_AUTO_CAL_DELAY_MS) {
+    imuGyroCalibrated = true;  // 即刻標記，防止呢段重複觸發
+    ledManualOverride = true;
+    setLEDWhite();
+    Serial1.print(F("\n⚪ [IMU] 開機自動校正陀螺零偏（機身請保持靜止）... t="));
+    Serial1.print(millis());
+    Serial1.println(F("ms"));
+    imuCalibrateGyro();
+    Serial1.print(F("⚪ [IMU] 校正完成 offsetX=")); Serial1.print(gyroOffsetX, 2);
+    Serial1.print(F(" Y=")); Serial1.print(gyroOffsetY, 2);
+    Serial1.print(F(" Z=")); Serial1.println(gyroOffsetZ, 2);
+    setLEDOff();
+    ledManualOverride = false;  // 交返俾 updateActivityLED() 自動判斷
   }
 
-  if (batchMode && (millis() - lastCharTime > BATCH_TIMEOUT)) {
-    executeBatchCommands();
-    batchMode = false;
+  // IMU 固定周期更新（純感測，唔影響 table_walk/伺服控制）
+  unsigned long nowImuTick = millis();
+  if (imuData.present && nowImuTick - lastImuUpdateMs >= IMU_UPDATE_INTERVAL_MS) {
+    lastImuUpdateMs = nowImuTick;
+    imuUpdate();
   }
 
-  static unsigned long lastBreath = 0;
-
-  if (millis() - lastBreath > 10000) {
-    if (!voltageData.warningActive && !balanceSystem.enabled) {
-      breathLED(LED_BLUE_PIN, BREATH_SPEED);
-      setLEDBlue();
-    }
-    lastBreath = millis();
-  }
-
-  // [FIX 6] 移除 delay(1)：消除 timing jitter，讓 loop() 盡快執行
 }
 
 // ===== 命令處理 =====
@@ -2126,161 +1121,337 @@ void processCommand(String cmd) {
   cmd.trim();
   cmd.toUpperCase();
 
+  // 短寫 alias：轉返做完整指令，之後行返原本邏輯，唔使逐個分支改
+  if (cmd == "V") cmd = "VOLTAGE";
+  else if (cmd == "G") cmd = "IMU";
+  else if (cmd == "GC") cmd = "IMU CAL";
+  else if (cmd == "HM") cmd = "HOME";
+  else if (cmd == "F") cmd = "FREE ALL";
+  else if (cmd == "ST") cmd = "STOP";
+  else if (cmd == "PS") cmd = "PMASTAT";
+
   if (cmd == "H" || cmd == "HELP" || cmd == "?") {
     showHelp();
-  } else if (cmd == "G") {
-    if (mpuData.calibrated) {
-      if (readMPU6050()) {
-        Serial1.print(F("加速度: X="));
-        Serial1.print(mpuData.ax);
-        Serial1.print(F(" Y="));
-        Serial1.print(mpuData.ay);
-        Serial1.print(F(" Z="));
-        Serial1.println(mpuData.az);
-
-        Serial1.print(F("陀螺儀: X="));
-        Serial1.print(mpuData.gx);
-        Serial1.print(F(" Y="));
-        Serial1.print(mpuData.gy);
-        Serial1.print(F(" Z="));
-        Serial1.println(mpuData.gz);
-
-        Serial1.print(F("溫度: "));
-        Serial1.println(mpuData.temperature);
-
-        // [新增] 顯示平衡角度
-        Serial1.print(F("濾波角度 Pitch="));
-        Serial1.print(balanceSystem.pitchFiltered, 2);
-        Serial1.print(F("° Roll="));
-        Serial1.print(balanceSystem.rollFiltered, 2);
-        Serial1.println(F("°"));
-        Serial1.print(F("目標角度 Pitch="));
-        Serial1.print(balanceSystem.targetPitch, 2);
-        Serial1.print(F("° Roll="));
-        Serial1.print(balanceSystem.targetRoll, 2);
-        Serial1.println(F("°"));
-        // [新增] 結束
-      }
-    } else {
-      Serial1.println(F("❌ 陀螺儀未校準，請輸入 CALIBRATE"));
-    }
   } else if (cmd == "VOLTAGE") {
     Serial1.print(F("🔋 當前電壓: "));
     Serial1.print(voltageData.currentVoltage);
     Serial1.println(F("V"));
-  } else if (cmd == "CALIBRATE") {
-    calibrateGyro();
+  } else if (cmd == "PMASTAT") {
+    Serial1.print(F("📊 .pma 封包統計: 成功="));
+    Serial1.print(pmaPacketOkCount);
+    Serial1.print(F(" 失敗="));
+    Serial1.print(pmaPacketFailCount);
+    Serial1.print(F(" 寬鬆接受="));
+    Serial1.println(pmaLenientAcceptCount);
+    Serial1.print(F("最近5次LEN: "));
+    for (uint8_t k = 0; k < 5; k++) {
+      Serial1.print(pmaLenHistory[k]);
+      Serial1.print(' ');
+    }
+    Serial1.println();
+    Serial1.print(F("0x18封包總數="));
+    Serial1.print(pmaCmd18Count);
+    Serial1.print(F(" 追蹤pmaID=0x"));
+    Serial1.print(PMA_DEBUG_TRACK_ID, HEX);
+    Serial1.print(F(" 最後角度="));
+    Serial1.println(pmaLastCmd18FirstAngle);
+    if (pmaLastFailBytesLen > 0) {
+      Serial1.print(F("最後失敗封包 LEN="));
+      Serial1.print(pmaLastFailLen);
+      Serial1.print(F(" CMD="));
+      Serial1.print(pmaLastFailCmd, HEX);
+      Serial1.print(F(" calc="));
+      Serial1.print(pmaLastFailCalc, HEX);
+      Serial1.print(F(" recv="));
+      Serial1.print(pmaLastFailParity, HEX);
+      Serial1.print(F(" 接收耗時="));
+      Serial1.print(pmaLastFailDurationMs);
+      Serial1.println(F("ms"));
+      Serial1.print(F("bytes="));
+      for (uint8_t d = 0; d < pmaLastFailBytesLen; d++) {
+        if (pmaLastFailBytes[d] < 0x10) Serial1.print('0');
+        Serial1.print(pmaLastFailBytes[d], HEX);
+        Serial1.print(' ');
+      }
+      Serial1.println();
+    }
+  } else if (cmd == "IMU") {
+    if (!imuData.present) {
+      Serial1.println(F("⚠️ IMU 未偵測到"));
+    } else {
+      Serial1.println(F("---- IMU (MPU-6050) ----"));
+      Serial1.print(F("accel(g)  X=")); Serial1.print(imuData.accelX, 3);
+      Serial1.print(F(" Y=")); Serial1.print(imuData.accelY, 3);
+      Serial1.print(F(" Z=")); Serial1.println(imuData.accelZ, 3);
+      Serial1.print(F("gyro(dps) X=")); Serial1.print(imuData.gyroX, 2);
+      Serial1.print(F(" Y=")); Serial1.print(imuData.gyroY, 2);
+      Serial1.print(F(" Z=")); Serial1.println(imuData.gyroZ, 2);
+      Serial1.print(F("pitch=")); Serial1.print(imuData.pitch, 2);
+      Serial1.print(F("°  roll=")); Serial1.print(imuData.roll, 2);
+      Serial1.println(F("°"));
+    }
+  } else if (cmd == "IMU CAL") {
+    if (!imuData.present) {
+      Serial1.println(F("⚠️ IMU 未偵測到，無法校正"));
+    } else {
+      Serial1.print(F("校正陀螺零偏（機身請保持靜止）..."));
+      imuCalibrateGyro();
+      Serial1.println(F("完成"));
+    }
   } else if (cmd == "HOME") {
-    walkGen.safeStop();
+    tableWalkSafeStop();
     moveAllServosToHome();
   } else if (cmd == "FREE ALL") {
-    walkGen.safeStop();
+    tableWalkSafeStop();
     processFreeCommand("FREE ALL");
   }
-  // [新增] BALANCE 命令
-  else if (cmd.startsWith("BALANCE ")) {
-    processBalanceCommand(cmd.substring(8));
+  // ===== LED 測試指令 =====
+  else if (cmd == "LED RED") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 0;
+    Serial1.println(F("✅ LED = 紅（呼吸）"));
+  } else if (cmd == "LED GREEN") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 1;
+    Serial1.println(F("✅ LED = 綠（呼吸）"));
+  } else if (cmd == "LED BLUE") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 2;
+    Serial1.println(F("✅ LED = 藍（呼吸）"));
+  } else if (cmd == "LED YELLOW") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 3;
+    Serial1.println(F("✅ LED = 黃（呼吸）"));
+  } else if (cmd == "LED CYAN") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 4;
+    Serial1.println(F("✅ LED = 青（呼吸）"));
+  } else if (cmd == "LED PURPLE") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 5;
+    Serial1.println(F("✅ LED = 紫（呼吸）"));
+  } else if (cmd == "LED WHITE") {
+    ledManualOverride = true;
+    manualBreathColorIndex = 6;
+    Serial1.println(F("✅ LED = 白（呼吸）"));
+  } else if (cmd == "LED OFF") {
+    ledManualOverride = true;
+    manualBreathColorIndex = -1;
+    setLEDOff();
+    Serial1.println(F("✅ LED = 關"));
+  } else if (cmd == "LED AUTO") {
+    ledManualOverride = false;
+    manualBreathColorIndex = -1;
+    Serial1.println(F("✅ LED 恢復自動模式（電壓狀態顯示）"));
+  } else if (cmd.startsWith("LED BREATH ")) {
+    // 格式: LED BREATH <RED|GREEN|BLUE> <speed(ms)> [次數]
+    String args = cmd.substring(11);
+    args.trim();
+    int sp1 = args.indexOf(' ');
+    if (sp1 < 0) {
+      Serial1.println(F("❌ 格式錯誤，用法: LED BREATH <RED/GREEN/BLUE> <速度ms> [次數]"));
+    } else {
+      String colorName = args.substring(0, sp1);
+      String rest = args.substring(sp1 + 1);
+      rest.trim();
+      int sp2 = rest.indexOf(' ');
+      int speed = (sp2 > 0) ? rest.substring(0, sp2).toInt() : rest.toInt();
+      int cycles = (sp2 > 0) ? rest.substring(sp2 + 1).toInt() : 1;
+      speed = constrain(speed, 1, 100);
+      cycles = constrain(cycles, 1, 20);
+
+      int pin = ledPinByName(colorName);
+      if (pin < 0) {
+        Serial1.println(F("❌ 顏色錯誤，用: RED/GREEN/BLUE"));
+      } else {
+        ledManualOverride = true;
+        manualBreathColorIndex = -1;  // 呢個測試用阻塞式 breathLED()，唔經過手動呼吸機制
+        Serial1.print(F("✅ 呼吸燈測試: ")); Serial1.print(colorName);
+        Serial1.print(F(" speed=")); Serial1.print(speed);
+        Serial1.print(F(" x")); Serial1.println(cycles);
+        for (int i = 0; i < cycles; i++) {
+          breathLED(pin, speed);
+        }
+        setLEDOff();
+      }
+    }
+  } else if (cmd.startsWith("LED BRIGHT ")) {
+    // 格式: LED BRIGHT <RED|GREEN|BLUE> <0-255>
+    String args = cmd.substring(11);
+    args.trim();
+    int sp1 = args.indexOf(' ');
+    if (sp1 < 0) {
+      Serial1.println(F("❌ 格式錯誤，用法: LED BRIGHT <RED/GREEN/BLUE> <0-255>"));
+    } else {
+      String colorName = args.substring(0, sp1);
+      int brightness = constrain(args.substring(sp1 + 1).toInt(), 0, 255);
+      int logicalColor = ledPinByName(colorName);
+      if (logicalColor < 0) {
+        Serial1.println(F("❌ 顏色錯誤，用: RED/GREEN/BLUE"));
+      } else {
+        ledManualOverride = true;
+        manualBreathColorIndex = -1;  // 清走手動呼吸選色，避免覆蓋固定亮度
+        // 測試單一顏色亮度前，先關晒另外兩隻，避免混色
+        setLEDOff();
+        int physPin = ledPhysicalPin(logicalColor);
+        analogWrite(physPin, 255 - brightness);  // active-low: 反轉 duty cycle
+        Serial1.print(F("✅ ")); Serial1.print(colorName);
+        Serial1.print(F(" 亮度 = ")); Serial1.println(brightness);
+      }
+    }
   }
-  // [新增] 結束
   else if (cmd.startsWith("WALK ")) {
     String params = cmd.substring(5);
     params.trim();
 
     char dir = params.charAt(0);
-    int steps = params.substring(2).toInt();
 
-    if (steps < 1) steps = 1;
-    if (steps > 100) steps = 100;
-
-    walkGen.setDirection(dir);
-
+    // table_walk 用持續性方向輸入（x1/y1），冇「行N步」概念，
+    // 淨係設定方向同開始行，直到收到 STOP 為止。
     switch (dir) {
-      case 'F': Serial1.print(F("向前行 ")); break;
-      case 'B': Serial1.print(F("向後行 ")); break;
-      case 'L': Serial1.print(F("向左轉 ")); break;
-      case 'R': Serial1.print(F("向右轉 ")); break;
+      case 'F': tableWalker.y1 = 1.0f;  tableWalker.x1 = 0.0f; Serial1.print(F("向前行")); break;
+      case 'B': tableWalker.y1 = -1.0f; tableWalker.x1 = 0.0f; Serial1.print(F("向後行")); break;
+      case 'L': tableWalker.y1 = 0.0f;  tableWalker.x1 = -1.0f; Serial1.print(F("向左轉")); break;
+      case 'R': tableWalker.y1 = 0.0f;  tableWalker.x1 = 1.0f; Serial1.print(F("向右轉")); break;
       default:
         Serial1.println(F("❌ 方向錯誤 (F/B/L/R)"));
         return;
     }
+    Serial1.println();
 
-    Serial1.print(steps);
-    Serial1.println(F(" 步"));
+    tableWalker.lt_held = 1;
 
-    // [新增] 行走時切換平衡模式
-    if (balanceSystem.enabled) balanceSystem.setWalkingMode(true);
-    // [新增] 結束
-
-    walkGen.walkSteps(steps);
-
-    Serial1.println(F("✅ 步行指令已接收"));
+    Serial1.println(F("✅ 步行指令已接收（輸入 STOP 停止）"));
   } else if (cmd == "STOP") {
-    walkGen.safeStop();
-    // [新增] 停止時切回 Idle 平衡模式
-    if (balanceSystem.enabled) balanceSystem.setWalkingMode(false);
-    // [新增] 結束
-  } else if (cmd == "SHAKE_ASCII") {
-    actionShakeBox_ASCII();
-  } else if (cmd == "SHAKE_CPP") {
-    actionShakeBox_CPP();
-  } else if (cmd == "SHAKE_ICS") {
-    actionShakeBox_ICS();
+    tableWalkSafeStop();
   }
-  // ===== IK 調試命令 =====
-  else if (cmd.startsWith("IK ")) {
-    String params = cmd.substring(3);
+  // ===== table_walk 參數調整命令（取代原本嘅 IK SET）=====
+  else if (cmd == "WALKSET" || cmd.startsWith("WALKSET ")) {
+    String params = cmd.length() > 7 ? cmd.substring(8) : "";
     params.trim();
+    int spacePos = params.indexOf(' ');
+    if (spacePos > 0) {
+      String paramName = params.substring(0, spacePos);
+      int value = params.substring(spacePos + 1).toInt();
+      if (paramName == "LEN") {
+        tableWalkParams.dura_len = constrain(value, 20, 400);
+        Serial1.print(F("✅ DuraLen = ")); Serial1.println(tableWalkParams.dura_len);
+      } else if (paramName == "ROLL") {
+        tableWalkParams.dura_roll = constrain(value, 10, 200);
+        Serial1.print(F("✅ DuraRoll = ")); Serial1.println(tableWalkParams.dura_roll);
+      } else if (paramName == "PITCH") {
+        tableWalkParams.dura_pitch = constrain(value, 100, 1200);
+        Serial1.print(F("✅ DuraPitch = ")); Serial1.println(tableWalkParams.dura_pitch);
+      } else if (paramName == "TICKMS") {
+        Serial1.println(F("❌ TICKMS 需要重新編譯（#define TABLE_WALK_TICK_MS），暫不支援即時調整"));
+      } else if (paramName == "STRC") {
+        // 格式: WALKSET STRC <HV|MV> <值>
+        String strcArgs = params.substring(spacePos + 1);
+        strcArgs.trim();
+        int strcSpacePos = strcArgs.indexOf(' ');
+        if (strcSpacePos > 0) {
+          String strcGroup = strcArgs.substring(0, strcSpacePos);
+          strcGroup.toUpperCase();
+          int strc = constrain(strcArgs.substring(strcSpacePos + 1).toInt(), 1, 127);
 
-    if (params == "PARAM" || params == "SHOW") {
-      walkGen.showParams();
-    } else if (params.startsWith("SET ")) {
-      String setCmd = params.substring(4);
-      int spacePos = setCmd.indexOf(' ');
-      if (spacePos > 0) {
-        String paramName = setCmd.substring(0, spacePos);
-        float value = setCmd.substring(spacePos + 1).toFloat();
-        walkGen.setParam(paramName, value);
-      } else {
-        Serial1.println(F("用法: IK SET <參數> <數值>"));
-      }
-    } else if (params.startsWith("VERSION ")) {
-      int ver = params.substring(8).toInt();
-      walkGen.setIKVersion(ver);
-    } else if (params.startsWith("DEBUG ")) {
-      String debugCmd = params.substring(6);
-      int spacePos = debugCmd.indexOf(' ');
-      if (spacePos > 0) {
-        String mode = debugCmd.substring(0, spacePos);
-        bool enable = (debugCmd.substring(spacePos + 1) == "ON");
-        walkGen.setDebugMode(mode, enable);
-      } else {
-        bool enable = (debugCmd == "ON");
-        walkGen.setDebugMode("IK", enable);
-        walkGen.setDebugMode("WALK", enable);
-      }
-    } else if (params.startsWith("TEST ")) {
-      String testCmd = params.substring(5);
-      testCmd.trim();
+          if (strcGroup == "HV" || strcGroup == "MV") {
+            bool wantHV = (strcGroup == "HV");
+            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+              if (servoList[i].isHV == wantHV) {
+                safeSetStrc(&servoList[i], strc);
+              }
+            }
+            Serial1.print(F("✅ ")); Serial1.print(strcGroup);
+            Serial1.print(F(" 伺服 Stretch = ")); Serial1.println(strc);
+          } else {
+            Serial1.println(F("❌ 格式錯誤，用法: WALKSET STRC HV <值> 或 WALKSET STRC MV <值>"));
+          }
+        } else {
+          Serial1.println(F("❌ 格式錯誤，用法: WALKSET STRC HV <值> 或 WALKSET STRC MV <值>"));
+        }
+      } else if (paramName == "SPD") {
+        // 格式: WALKSET SPD <HV|MV> <值>
+        String spdArgs = params.substring(spacePos + 1);
+        spdArgs.trim();
+        int spdSpacePos = spdArgs.indexOf(' ');
+        if (spdSpacePos > 0) {
+          String spdGroup = spdArgs.substring(0, spdSpacePos);
+          spdGroup.toUpperCase();
+          int spd = constrain(spdArgs.substring(spdSpacePos + 1).toInt(), 1, 127);
 
-      bool plotMode = false;
-      if (testCmd.startsWith("PLOT ")) {
-        plotMode = true;
-        testCmd = testCmd.substring(5);
-        testCmd.trim();
-      }
+          if (spdGroup == "HV" || spdGroup == "MV") {
+            bool wantHV = (spdGroup == "HV");
+            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+              if (servoList[i].isHV == wantHV) {
+                safeSetSpd(&servoList[i], spd);
+              }
+            }
+            Serial1.print(F("✅ ")); Serial1.print(spdGroup);
+            Serial1.print(F(" 伺服 Speed = ")); Serial1.println(spd);
+          } else {
+            Serial1.println(F("❌ 格式錯誤，用法: WALKSET SPD HV <值> 或 WALKSET SPD MV <值>"));
+          }
+        } else {
+          Serial1.println(F("❌ 格式錯誤，用法: WALKSET SPD HV <值> 或 WALKSET SPD MV <值>"));
+        }
+      } else if (paramName == "CUR") {
+        // 格式: WALKSET CUR <HV|MV> <值>
+        String curArgs = params.substring(spacePos + 1);
+        curArgs.trim();
+        int curSpacePos = curArgs.indexOf(' ');
+        if (curSpacePos > 0) {
+          String curGroup = curArgs.substring(0, curSpacePos);
+          curGroup.toUpperCase();
+          int curlim = constrain(curArgs.substring(curSpacePos + 1).toInt(), 1, 63);
 
-      float x, y, z, yaw;
-      char side;
-      int parsed = sscanf(testCmd.c_str(), "%f %f %f %f %c", &x, &y, &z, &yaw, &side);
-      if (parsed == 5) {
-        walkGen.testIK(x, y, z, yaw, (side == 'R' || side == 'r'), plotMode);
+          if (curGroup == "HV" || curGroup == "MV") {
+            bool wantHV = (curGroup == "HV");
+            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+              if (servoList[i].isHV == wantHV) {
+                safeSetCur(&servoList[i], curlim);
+              }
+            }
+            Serial1.print(F("✅ ")); Serial1.print(curGroup);
+            Serial1.print(F(" 伺服 電流上限 = ")); Serial1.println(curlim);
+          } else {
+            Serial1.println(F("❌ 格式錯誤，用法: WALKSET CUR HV <值> 或 WALKSET CUR MV <值>"));
+          }
+        } else {
+          Serial1.println(F("❌ 格式錯誤，用法: WALKSET CUR HV <值> 或 WALKSET CUR MV <值>"));
+        }
+      } else if (paramName == "TMP") {
+        // 格式: WALKSET TMP <HV|MV> <值>
+        String tmpArgs = params.substring(spacePos + 1);
+        tmpArgs.trim();
+        int tmpSpacePos = tmpArgs.indexOf(' ');
+        if (tmpSpacePos > 0) {
+          String tmpGroup = tmpArgs.substring(0, tmpSpacePos);
+          tmpGroup.toUpperCase();
+          int tmplim = constrain(tmpArgs.substring(tmpSpacePos + 1).toInt(), 1, 127);
+
+          if (tmpGroup == "HV" || tmpGroup == "MV") {
+            bool wantHV = (tmpGroup == "HV");
+            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+              if (servoList[i].isHV == wantHV) {
+                safeSetTmp(&servoList[i], tmplim);
+              }
+            }
+            Serial1.print(F("✅ ")); Serial1.print(tmpGroup);
+            Serial1.print(F(" 伺服 溫度上限 = ")); Serial1.println(tmplim);
+          } else {
+            Serial1.println(F("❌ 格式錯誤，用法: WALKSET TMP HV <值> 或 WALKSET TMP MV <值>"));
+          }
+        } else {
+          Serial1.println(F("❌ 格式錯誤，用法: WALKSET TMP HV <值> 或 WALKSET TMP MV <值>"));
+        }
       } else {
-        Serial1.println(F("用法: IK TEST <x> <y> <z> <yaw> <R/L>"));
-        Serial1.println(F("      IK TEST PLOT <x> <y> <z> <yaw> <R/L> (繪圖模式)"));
-        Serial1.println(F("範例: IK TEST 20 -15 -120 0 R"));
+        Serial1.println(F("❌ 未知參數，可用: LEN, ROLL, PITCH, STRC, SPD, CUR, TMP"));
       }
     } else {
-      Serial1.println(F("IK 子命令: PARAM, SET, VERSION, DEBUG, TEST"));
+      Serial1.println(F("用法: WALKSET <LEN/ROLL/PITCH/STRC/SPD> <數值>"));
+      Serial1.print(F("目前: LEN=")); Serial1.print(tableWalkParams.dura_len);
+      Serial1.print(F(" ROLL=")); Serial1.print(tableWalkParams.dura_roll);
+      Serial1.print(F(" PITCH=")); Serial1.println(tableWalkParams.dura_pitch);
     }
   } else {
     // 嘗試作為標準 ASCII 指令處理
@@ -2292,54 +1463,38 @@ void processCommand(String cmd) {
 
 // ===== 顯示幫助選單 =====
 void showHelp() {
-  Serial1.println(F("\n=== 命令列表 ==="));
-  Serial1.println(F("H, HELP, ? : 顯示此說明"));
-  Serial1.println(F("G          : 顯示陀螺儀與加速度數據"));
-  Serial1.println(F("VOLTAGE    : 顯示當前電池電壓"));
-  Serial1.println(F("CALIBRATE  : 重新校準陀螺儀"));
-  Serial1.println(F("HOME       : 所有伺服機回到初始位置"));
-  Serial1.println(F("FREE ALL   : 所有伺服機脫力 (關閉扭力)"));
+  Serial1.println(F("\n=== 命令列表 (括號內為短寫) ==="));
+  Serial1.println(F("H, HELP, ?      : 顯示此說明"));
+  Serial1.println(F("VOLTAGE (V)     : 顯示當前電池電壓"));
+  Serial1.println(F("PMASTAT (PS)    : 顯示 .pma 封包接收統計 (成功/失敗數)"));
+  Serial1.println(F("IMU (G)         : 顯示 IMU (MPU-6050) 當前姿態 (accel/gyro/pitch/roll)"));
+  Serial1.println(F("IMU CAL (GC)    : 重新校正陀螺零偏 (機身須靜止)"));
+  Serial1.println(F("HOME (HM)       : 所有伺服機回到初始位置"));
+  Serial1.println(F("FREE ALL (F)    : 所有伺服機脫力 (關閉扭力)"));
+  Serial1.println(F("\n=== LED 測試指令 ==="));
+  Serial1.println(F("LED RED/GREEN/BLUE/YELLOW/CYAN/PURPLE/WHITE/OFF : 切換LED顏色 (7色+關)"));
+  Serial1.println(F("LED AUTO   : 恢復自動模式（電壓狀態顯示，藍=正常/紅=低電壓）"));
+  Serial1.println(F("LED BREATH <色> <速度ms> [次數] : 測試呼吸燈速度 (例: LED BREATH RED 4 3)"));
+  Serial1.println(F("LED BRIGHT <色> <0-255>        : 測試固定亮度 (例: LED BRIGHT BLUE 128)"));
   Serial1.println(F("\n=== 步行與動作指令 ==="));
-  Serial1.println(F("WALK F [步數] : 向前行指定步數 (例如: WALK F 10)"));
-  Serial1.println(F("WALK B [步數] : 向後行指定步數"));
-  Serial1.println(F("WALK L [步數] : 向左轉彎指定步數"));
-  Serial1.println(F("WALK R [步數] : 向右轉彎指定步數"));
-  Serial1.println(F("STOP          : 立即安全停止當前動作並回到 Home Point"));
-  Serial1.println(F("SHAKE_ASCII   : 執行 Shake Box (ASCII 指令版)"));
-  Serial1.println(F("SHAKE_CPP     : 執行 Shake Box (C++ 函式版)"));
-  Serial1.println(F("SHAKE_ICS     : 執行 Shake Box (ICS 二進制版)"));
+  Serial1.println(F("WALK F/B/L/R  : 開始向前/後/左轉/右轉行走，直到收到 STOP"));
+  Serial1.println(F("STOP (ST)     : 立即安全停止當前動作並回到 Home Point"));
   Serial1.println(F("\n=== 單軸/多軸微調 (ASCII) ==="));
   Serial1.println(F("S [群組] [ID] [角度] [速度] : 設定單一伺服 (例: S HV 1 8000 64)"));
   Serial1.println(F("S MULTI [速度] [數量] [群組ID 角度 ...] : 多軸同步"));
   Serial1.println(F("? [群組] [ID] : 查詢伺服當前位置"));
-  Serial1.println(F("\n=== IK 即時調試指令 ==="));
-  Serial1.println(F("IK PARAM        : 顯示當前所有 IK 參數"));
-  Serial1.println(F("IK SET <參數> <值> : 調整 IK 參數"));
-  Serial1.println(F("IK VERSION <1-3> : 切換 IK 版本"));
-  Serial1.println(F("IK DEBUG ON/OFF  : 開關 IK 調試輸出"));
-  Serial1.println(F("IK TEST <x> <y> <z> <yaw> <R/L> : 測試 IK 求解器"));
-  Serial1.println(F("IK TEST PLOT <x> <y> <z> <yaw> <R/L> : 測試 IK (繪圖模式)"));
-  // [新增] 平衡系統說明
-  Serial1.println(F("\n=== 自平衡系統 ==="));
-  Serial1.println(F("BALANCE CALIBRATE         : ⭐ 設定當前站姿為平衡目標"));
-  Serial1.println(F("BALANCE ON / OFF           : 啟用 / 停用自平衡"));
-  Serial1.println(F("BALANCE STATUS             : 顯示所有平衡參數"));
-  Serial1.println(F("BALANCE DEBUG ON/OFF       : 開關 debug 輸出"));
-  Serial1.println(F("BALANCE RESET              : 重置統計"));
-  Serial1.println(F("BALANCE IDLE / WALKING     : 切換站立/行走平衡模式"));
-  Serial1.println(F("BALANCE HV11/12/13/14 INVERT : ⭐ 獨立翻轉每隻踝方向"));
-  Serial1.println(F("  調八字：BALANCE DEBUG ON，推機器人，觀察 Roll PID"));
-  Serial1.println(F("          哪隻踝方向錯就 INVERT 哪隻"));
-  Serial1.println(F("BALANCE PITCH/ROLL KP/KI/KD <值>"));
-  Serial1.println(F("BALANCE IDLE/WALK PITCH/ROLL KP/KI/KD <值>"));
-  Serial1.println(F("BALANCE RELOAD             : 載入當前模式 PID"));
-  Serial1.println(F("BALANCE FILTER <0-1>       : 互補濾波 gyro 權重 (預設0.98)"));
-  Serial1.println(F("BALANCE MAXCOMP PITCH/ROLL <°>"));
-  Serial1.println(F("BALANCE DEADZONE PITCH/ROLL <°>"));
-  Serial1.println(F("BALANCE RATE <pulse>       : Rate limit (預設45≈1.5°/cycle)"));
-  Serial1.println(F("\n💡 建議流程:"));
-  Serial1.println(F("1. CALIBRATE → HOME → BALANCE CALIBRATE"));
-  Serial1.println(F("2. BALANCE ON → BALANCE DEBUG ON 觀察數據"));
-  Serial1.println(F("3. 先從 Kp=0.3 開始: BALANCE PITCH KP 0.3"));
-  // [新增] 結束
+  Serial1.println(F("\n=== table_walk 步態參數調整 ==="));
+  Serial1.println(F("WALKSET             : 顯示目前 LEN/ROLL/PITCH 數值"));
+  Serial1.println(F("WALKSET LEN <值>    : 調整抬腳/伸展幅度 (預設140)"));
+  Serial1.println(F("WALKSET ROLL <值>   : 調整重心左右搖擺幅度 (預設80)"));
+  Serial1.println(F("WALKSET PITCH <值>  : 調整步幅前後幅度 (預設600)"));
+  Serial1.println(F("WALKSET STRC HV <值>: HV 伺服 Stretch 硬度 (1-127, 原廠60)"));
+  Serial1.println(F("WALKSET STRC MV <值>: MV 伺服 Stretch 硬度 (1-127, 原廠100)"));
+  Serial1.println(F("WALKSET SPD HV <值> : HV 伺服 Speed 速度 (1-127, 原廠127)"));
+  Serial1.println(F("WALKSET SPD MV <值> : MV 伺服 Speed 速度 (1-127, 原廠100)"));
+  Serial1.println(F("WALKSET CUR HV <值> : HV 伺服 電流上限 (1-63, 原廠20)"));
+  Serial1.println(F("WALKSET CUR MV <值> : MV 伺服 電流上限 (1-63, 原廠40)"));
+  Serial1.println(F("WALKSET TMP HV <值> : HV 伺服 溫度上限 (1-127, 原廠80)"));
+  Serial1.println(F("WALKSET TMP MV <值> : MV 伺服 溫度上限 (1-127, 原廠40)"));
+  Serial1.println(F("? [群組] [ID] [STRC/SPD/CUR/TMP] : 讀取伺服參數 (冇第3項=查角度)"));
 }
