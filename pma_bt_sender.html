@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMA BT Sender — PremaidAI 動作上傳器（原裝協議）</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --accent: #5eead4;
+    --accent-dim: #2dd4bf33;
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --ok: #4ade80;
+    --mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--danger);
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  h1 .dot.connected { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 24px; line-height: 1.5; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row + .row { margin-top: 10px; }
+
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-weight: 500;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-dim); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { background: #7ff5e2; }
+  button.danger { color: var(--danger); }
+  button.danger:hover:not(:disabled) { border-color: var(--danger); background: #f8717122; }
+
+  input[type=file] { display: none; }
+  input[type=number] {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+    width: 80px;
+    font-family: var(--mono);
+  }
+  .file-drop {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    font-size: 0.9rem;
+  }
+  .file-drop:hover, .file-drop.drag { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
+  .file-drop .fname { color: var(--accent); font-weight: 600; margin-top: 4px; word-break: break-all; }
+
+  select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 0.9rem;
+  }
+
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .info-cell {
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .info-cell .label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .info-cell .value { font-size: 1.1rem; font-weight: 600; margin-top: 2px; font-family: var(--mono); }
+  .info-cell .value.warn { color: var(--warn); }
+  .info-cell .value.err { color: var(--danger); }
+
+  .progress-outer {
+    background: var(--panel-2);
+    border-radius: 999px;
+    height: 8px;
+    overflow: hidden;
+    margin: 14px 0 6px;
+  }
+  .progress-inner {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #7ff5e2);
+    width: 0%;
+    transition: width 0.15s linear;
+  }
+  .progress-inner.err { background: linear-gradient(90deg, var(--danger), #fca5a5); }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    font-family: var(--mono);
+  }
+
+  .step-label {
+    font-size: 0.82rem;
+    color: var(--accent);
+    font-family: var(--mono);
+    margin-bottom: 4px;
+    min-height: 1.2em;
+  }
+
+  .log-box {
+    background: #0a0c10;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    height: 220px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .log-box .l-err { color: var(--danger); }
+  .log-box .l-warn { color: var(--warn); }
+  .log-box .l-ok { color: var(--ok); }
+  .log-box .l-tx { color: var(--accent); }
+  .log-box .l-step { color: #c4b5fd; font-weight: 600; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--panel-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .badge.connected { color: var(--ok); border-color: var(--ok); }
+
+  .not-supported {
+    background: #3a1d1d;
+    border: 1px solid var(--danger);
+    color: #fecaca;
+    padding: 14px 16px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
+
+  .footer-note {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    text-align: center;
+    margin-top: 20px;
+    line-height: 1.6;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1><span class="dot" id="statusDot"></span>PMA BT Sender — 原裝協議版</h1>
+  <div class="subtitle">
+    跟原裝 App 一致嘅上傳方式：先將 .pma 動作資料寫入機械人 MCU 嘅 Flash（分 60 個 1KB page，每頁校驗），
+    再送一次 StartMotion，之後由 MCU 自己讀 Flash 播放，唔再靠呢個網頁即時控制節奏。
+  </div>
+
+  <div id="unsupportedBox" class="not-supported" style="display:none">
+    你嘅瀏覽器唔支援 Web Serial API。請用 <b>Chrome</b> 或 <b>Edge</b>（桌面版），並確保網址係 <b>https://</b> 或 <b>localhost</b>。
+    <br>藍牙串口通常要先喺系統設定配對做 COM port / rfcomm，先會喺揀選清單度出現。
+  </div>
+
+  <!-- 連線 -->
+  <div class="panel">
+    <div class="panel-title">串口連線</div>
+    <div class="row">
+      <button id="btnConnect" class="primary">🔌 連接串口</button>
+      <button id="btnDisconnect" class="danger" disabled>斷開連線</button>
+      <span class="badge" id="connBadge">未連接</span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label style="font-size:0.85rem;color:var(--text-dim)">Baud rate</label>
+      <select id="baudSelect">
+        <option value="115200" selected>115200</option>
+        <option value="57600">57600</option>
+        <option value="38400">38400</option>
+        <option value="19200">19200</option>
+        <option value="9600">9600</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 緊急控制 -->
+  <div class="panel" style="border-color:var(--warn)">
+    <div class="panel-title" style="color:var(--warn)">⚠️ 緊急控制（隨時可送，唔使停低上傳/播放）</div>
+    <div class="row">
+      <button id="btnFree" class="danger" disabled>🖐️ FREE 全身脫力 (F)</button>
+      <button id="btnHome" disabled>🏠 HOME 歸位 (HM)</button>
+      <button id="btnStopMotion" class="danger" disabled>🛑 停止播放 (StopMotion)</button>
+      <button id="btnVoltage" disabled>🔋 電壓查詢 (V)</button>
+    </div>
+  </div>
+
+  <!-- 檔案 -->
+  <div class="panel">
+    <div class="panel-title">選擇 .pma 檔案</div>
+    <label class="file-drop" id="fileDrop" for="fileInput">
+      📂 點擊選擇 或 拖放 .pma 檔案到呢度
+      <div class="fname" id="fileName"></div>
+    </label>
+    <input type="file" id="fileInput" accept=".pma">
+    <div class="info-grid" id="infoGrid" style="display:none">
+      <div class="info-cell"><div class="label">動作名稱</div><div class="value" id="infoName">-</div></div>
+      <div class="info-cell"><div class="label">資料大小</div><div class="value" id="infoBytes">-</div></div>
+      <div class="info-cell"><div class="label">需要 Page 數</div><div class="value" id="infoPages">-</div></div>
+    </div>
+  </div>
+
+  <!-- 上傳控制 -->
+  <div class="panel">
+    <div class="panel-title">上傳到 Flash</div>
+    <div class="row">
+      <label style="font-size:0.85rem;color:var(--text-dim)">Motion ID</label>
+      <input type="number" id="motionIdInput" value="1" min="0" max="65534">
+      <label class="toggle-row">
+        <input type="checkbox" id="verifyCheck" checked> 上傳後逐 page 讀回校驗（建議開啟）
+      </label>
+    </div>
+
+    <div class="step-label" id="stepLabel">閒置中</div>
+    <div class="progress-outer"><div class="progress-inner" id="progressBar"></div></div>
+    <div class="progress-label">
+      <span id="progressText">0 / 0</span>
+      <span id="progressPct">0%</span>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button id="btnUpload" class="primary" disabled>⬆️ 上傳去 Flash</button>
+      <button id="btnCancelUpload" class="danger" disabled>取消上傳</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--text-dim);margin-left:auto">
+        <input type="checkbox" id="dryRunCheck"> 模擬模式（唔連 serial，只顯示 log）
+      </label>
+    </div>
+  </div>
+
+  <!-- 播放控制 -->
+  <div class="panel">
+    <div class="panel-title">播放（上傳完成後使用）</div>
+    <div class="row">
+      <label style="font-size:0.85rem;color:var(--text-dim)">起始 Page</label>
+      <input type="number" id="startPageInput" value="0" min="0" max="59">
+      <button id="btnStartMotion" class="primary" disabled>▶️ StartMotion 開始播放</button>
+    </div>
+    <div style="font-size:0.78rem;color:var(--text-dim);margin-top:8px">
+      上傳成功後起始 page 會自動填入（一般係 0）。MCU 收到 StartMotion 之後會自己由 Flash 逐個 packet 讀出嚟播，本網頁唔會再控制節奏。
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="panel">
+    <div class="panel-title">Log</div>
+    <div class="log-box" id="logBox"></div>
+  </div>
+
+  <div class="footer-note">
+    跟返反編譯原裝 App 協議：WriteMotionId(清空) → 逐 page [8×128-byte WriteMotionData → SaveMotionData → ReadFlashBuffer 校驗] → WriteMotionId(真正ID) → SaveMotionId → StartMotion。<br>
+    每個 command 都等 MCU response 先送下一個，唔靠估計時間，同原裝 App 行為一致。
+  </div>
+
+</div>
+
+<script>
+(() => {
+  const dom = {
+    statusDot: document.getElementById('statusDot'),
+    connBadge: document.getElementById('connBadge'),
+    btnConnect: document.getElementById('btnConnect'),
+    btnDisconnect: document.getElementById('btnDisconnect'),
+    baudSelect: document.getElementById('baudSelect'),
+    fileInput: document.getElementById('fileInput'),
+    fileDrop: document.getElementById('fileDrop'),
+    fileName: document.getElementById('fileName'),
+    infoGrid: document.getElementById('infoGrid'),
+    infoName: document.getElementById('infoName'),
+    infoBytes: document.getElementById('infoBytes'),
+    infoPages: document.getElementById('infoPages'),
+    motionIdInput: document.getElementById('motionIdInput'),
+    verifyCheck: document.getElementById('verifyCheck'),
+    stepLabel: document.getElementById('stepLabel'),
+    progressBar: document.getElementById('progressBar'),
+    progressText: document.getElementById('progressText'),
+    progressPct: document.getElementById('progressPct'),
+    btnUpload: document.getElementById('btnUpload'),
+    btnCancelUpload: document.getElementById('btnCancelUpload'),
+    dryRunCheck: document.getElementById('dryRunCheck'),
+    startPageInput: document.getElementById('startPageInput'),
+    btnStartMotion: document.getElementById('btnStartMotion'),
+    logBox: document.getElementById('logBox'),
+    unsupportedBox: document.getElementById('unsupportedBox'),
+  };
+
+  // ---------- 常數（跟原裝協議） ----------
+  const PAGE_SIZE = 1024;
+  const CHUNK_SIZE = 128;
+  const MAX_PAGES = 60;
+  const CMD_WRITE_MOTION_DATA = 0x1D;
+  const CMD_SAVE_MOTION_DATA = 0x1E;
+  const CMD_READ_FLASH_BUFFER = 0x1C;
+  const CMD_WRITE_MOTION_ID = 0x02;
+  const CMD_SAVE_MOTION_ID = 0x04;
+  const CMD_START_STOP_MOTION = 0x1F;
+  const RESPONSE_TIMEOUT_MS = 1500; // 原裝用 1000ms，呢度留多少少 margin 畀 flash erase (可能到幾十ms)
+
+  let port = null;
+  let writer = null;
+  let reader = null;
+  let readLoopActive = false;
+  let uploadCancelled = false;
+  let uploadRunning = false;
+
+  // 等待緊嘅 response 收集器：用一個簡單 queue，
+  // 每次送一個 command 就 push 一個 pending resolver，
+  // read loop 收到完整 response 就 shift 出嚟 resolve。
+  let pendingResponse = null; // { expectedLen: number|null, resolve, reject, buf: Uint8Array[] }
+
+  function log(msg, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    line.textContent = `[${t}] ${msg}`;
+    dom.logBox.appendChild(line);
+    dom.logBox.scrollTop = dom.logBox.scrollHeight;
+  }
+
+  function setStep(text) {
+    dom.stepLabel.textContent = text;
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+  }
+
+  function xorChecksum(bytes, len) {
+    let sum = 0;
+    for (let i = 0; i < len; i++) sum ^= bytes[i];
+    return sum & 0xFF;
+  }
+
+  // ---------- .pma 解析 ----------
+  function parsePma(text) {
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    const re = /\[モーション\((\d+)\)\][\r\n]+番号=(\d+)[\r\n]+名前=(.*?)[\r\n]+データ=([0-9A-Fa-f ]+)/;
+    const m = re.exec(text);
+    if (!m) throw new Error('搵唔到 [モーション(N)] section，格式唔啱？');
+    const name = m[3].trim();
+    const hexStr = m[4].trim();
+    const hexParts = hexStr.split(/\s+/).filter(Boolean);
+    const data = new Uint8Array(hexParts.length);
+    for (let i = 0; i < hexParts.length; i++) {
+      data[i] = parseInt(hexParts[i], 16);
+    }
+    return { name, data };
+  }
+
+  let motionName = null;
+  let motionData = null; // Uint8Array，最多 61440 bytes（60 pages）
+
+  function loadFile(file) {
+    const fr = new FileReader();
+    fr.onload = (e) => {
+      try {
+        const text = e.target.result;
+        const { name, data } = parsePma(text);
+
+        // 跟原裝一致：最多 61440 bytes (60 pages x 1024)
+        const truncated = data.length > MAX_PAGES * PAGE_SIZE
+          ? data.slice(0, MAX_PAGES * PAGE_SIZE)
+          : data;
+
+        motionName = name;
+        motionData = truncated;
+
+        const pagesNeeded = Math.ceil(truncated.length / PAGE_SIZE);
+
+        dom.fileName.textContent = file.name;
+        dom.infoGrid.style.display = 'grid';
+        dom.infoName.textContent = name || '(未命名)';
+        dom.infoBytes.textContent = truncated.length + ' bytes' + (data.length > truncated.length ? ' (已截斷)' : '');
+        dom.infoPages.textContent = pagesNeeded + ' / ' + MAX_PAGES;
+
+        resetProgress();
+        dom.btnUpload.disabled = false;
+        log(`讀取成功: ${file.name} — 動作「${name}」，${truncated.length} bytes，需要 ${pagesNeeded} 個 page`, 'l-ok');
+        if (data.length > truncated.length) {
+          log(`警告：檔案大過 60KB 上限，已截斷至 ${truncated.length} bytes`, 'l-warn');
+        }
+      } catch (err) {
+        log(`解析失敗: ${err.message}`, 'l-err');
+        dom.btnUpload.disabled = true;
+      }
+    };
+    fr.onerror = () => log('讀取檔案失敗', 'l-err');
+    fr.readAsText(file, 'utf-8');
+  }
+
+  dom.fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) loadFile(e.target.files[0]);
+  });
+  ['dragover', 'dragenter'].forEach(evt => {
+    dom.fileDrop.addEventListener(evt, (e) => { e.preventDefault(); dom.fileDrop.classList.add('drag'); });
+  });
+  ['dragleave', 'drop'].forEach(evt => {
+    dom.fileDrop.addEventListener(evt, (e) => { e.preventDefault(); dom.fileDrop.classList.remove('drag'); });
+  });
+  dom.fileDrop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.toLowerCase().endsWith('.pma')) loadFile(f);
+    else log('請拖放 .pma 檔案', 'l-warn');
+  });
+
+  // ---------- Web Serial 連線 ----------
+  function checkSupport() {
+    if (!('serial' in navigator)) {
+      dom.unsupportedBox.style.display = 'block';
+      dom.btnConnect.disabled = true;
+      return false;
+    }
+    return true;
+  }
+
+  async function connectSerial() {
+    try {
+      port = await navigator.serial.requestPort();
+      const baud = parseInt(dom.baudSelect.value, 10);
+      await port.open({ baudRate: baud });
+      writer = port.writable.getWriter();
+
+      dom.statusDot.classList.add('connected');
+      dom.connBadge.textContent = `已連接 @ ${baud}`;
+      dom.connBadge.classList.add('connected');
+      dom.btnConnect.disabled = true;
+      dom.btnDisconnect.disabled = false;
+      dom.baudSelect.disabled = true;
+      setEmergencyButtonsEnabled(true);
+      if (motionData) dom.btnUpload.disabled = false;
+      log(`串口已連接，baud=${baud}`, 'l-ok');
+
+      startReadLoop();
+    } catch (err) {
+      if (err.name === 'NotFoundError') log('未選擇任何裝置', 'l-warn');
+      else log(`連接失敗: ${err.message}`, 'l-err');
+    }
+  }
+
+  async function cleanupConnection() {
+    cancelUpload();
+    stopReadLoop();
+    try { if (writer) writer.releaseLock(); } catch (e) {}
+    try { if (port) await port.close(); } catch (e) {}
+    writer = null;
+    port = null;
+    dom.statusDot.classList.remove('connected');
+    dom.connBadge.textContent = '未連接';
+    dom.connBadge.classList.remove('connected');
+    dom.btnConnect.disabled = false;
+    dom.btnDisconnect.disabled = true;
+    dom.baudSelect.disabled = false;
+    setEmergencyButtonsEnabled(false);
+    dom.btnUpload.disabled = true;
+    dom.btnStartMotion.disabled = true;
+  }
+
+  dom.btnConnect.addEventListener('click', connectSerial);
+  dom.btnDisconnect.addEventListener('click', async () => {
+    await cleanupConnection();
+    log('已手動斷開連線');
+  });
+
+  // ---------- 背景 read loop：解析 response，餵俾 pendingResponse ----------
+  // Response 格式有兩種：
+  //   一般 4-byte:  [LEN=4][CMD][errorBitmask][checksum]
+  //   ReadFlashBuffer 大 payload: [0xFF sentinel][CMD=0x1C][1024 bytes][checksum]  (共 1027 bytes)
+  // 呢度用一個簡單 byte accumulator，根據第一個 byte 判斷預期總長度。
+  let rxBuf = [];
+
+  function tryParseResponse() {
+    if (rxBuf.length < 2) return null;
+    const lenByte = rxBuf[0];
+    let totalLen;
+    if (lenByte === 0xFF) {
+      // large payload sentinel: 0xFF, CMD, 1024 data, 1 checksum = 1027
+      totalLen = 1 + 1 + 1024 + 1;
+    } else {
+      totalLen = lenByte; // 一般 response: LEN byte 就係總長度（含自己）
+    }
+    if (rxBuf.length < totalLen) return null; // 未收齊
+    const pkt = rxBuf.slice(0, totalLen);
+    rxBuf = rxBuf.slice(totalLen);
+    return new Uint8Array(pkt);
+  }
+
+  async function startReadLoop() {
+    readLoopActive = true;
+    reader = port.readable.getReader();
+    let textLineBuf = '';
+    try {
+      while (readLoopActive) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value || !value.length) continue;
+
+        for (let i = 0; i < value.length; i++) {
+          rxBuf.push(value[i]);
+        }
+
+        // 嘗試解析出完整 response packet
+        let pkt;
+        while ((pkt = tryParseResponse()) !== null) {
+          if (pendingResponse) {
+            const resolver = pendingResponse;
+            pendingResponse = null;
+            resolver.resolve(pkt);
+          } else {
+            // 冇 command 喺度等緊呢個 response——可能係 MCU 主動 print
+            // 嘅 debug 文字被誤判做 binary，或者真係無人要嘅 response。
+            // 呢度都印出嚟畀你 debug 用。
+            log(`收到未預期嘅回應: ${bytesToHex(pkt)}`, 'l-warn');
+          }
+        }
+      }
+    } catch (err) {
+      if (readLoopActive) log(`讀取串口時發生錯誤: ${err.message}`, 'l-warn');
+    } finally {
+      try { reader.releaseLock(); } catch (e) {}
+    }
+  }
+
+  function stopReadLoop() {
+    readLoopActive = false;
+    try { if (reader) reader.cancel(); } catch (e) {}
+    if (pendingResponse) {
+      const r = pendingResponse;
+      pendingResponse = null;
+      r.reject(new Error('連線中斷'));
+    }
+    rxBuf = [];
+  }
+
+  // 送一個 command 並等待 response（用 rxBuf accumulator 判斷完整性）。
+  // dryRun 模式下唔會真係等待，直接 resolve 一個假嘅成功 response。
+  function sendCommandAndWait(bytes, { dryRun, timeoutMs } = {}) {
+    return new Promise((resolve, reject) => {
+      if (dryRun || !writer) {
+        log(`[模擬] TX: ${bytesToHex(bytes)}`, 'l-tx');
+        // 模擬一個 4-byte 成功 response: LEN=4, CMD=bytes[1], err=0, checksum
+        const cmd = bytes.length > 1 ? bytes[1] : 0;
+        const fake = new Uint8Array([4, cmd, 0, 4 ^ cmd ^ 0]);
+        setTimeout(() => resolve(fake), 5);
+        return;
+      }
+
+      if (pendingResponse) {
+        reject(new Error('已經有 command 等緊 response，唔應該同時送兩個'));
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        if (pendingResponse === thisResolver) pendingResponse = null;
+        reject(new Error('等待 MCU 回應逾時'));
+      }, timeoutMs || RESPONSE_TIMEOUT_MS);
+
+      const thisResolver = {
+        resolve: (pkt) => { clearTimeout(timer); resolve(pkt); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
+      };
+      pendingResponse = thisResolver;
+
+      writer.write(bytes).catch(err => {
+        if (pendingResponse === thisResolver) pendingResponse = null;
+        clearTimeout(timer);
+        reject(err);
+      });
+
+      log(`TX: ${bytesToHex(bytes)}`, 'l-tx');
+    });
+  }
+
+  // ---------- 緊急控制 ----------
+  async function sendAsciiCommand(cmd, label) {
+    if (!writer) { log('未連接串口，無法送出指令', 'l-warn'); return; }
+    try {
+      const payload = new TextEncoder().encode(cmd + '\n');
+      await writer.write(payload);
+      log(`已送出指令: ${label} (${cmd})`, 'l-tx');
+    } catch (err) {
+      log(`送出 ${label} 失敗: ${err.message}`, 'l-err');
+    }
+  }
+
+  document.getElementById('btnFree').addEventListener('click', () => {
+    sendAsciiCommand('F', 'FREE 全身脫力');
+    cancelUpload();
+  });
+  document.getElementById('btnHome').addEventListener('click', () => {
+    sendAsciiCommand('HM', 'HOME 歸位');
+  });
+  document.getElementById('btnVoltage').addEventListener('click', () => {
+    sendAsciiCommand('V', '電壓查詢');
+  });
+  document.getElementById('btnStopMotion').addEventListener('click', async () => {
+    if (!writer) { log('未連接串口', 'l-warn'); return; }
+    try {
+      // StopMotion: LEN=5, CMD=0x1F, 0x08, 0x01, checksum
+      const pkt = new Uint8Array([5, CMD_START_STOP_MOTION, 0x08, 0x01, 0]);
+      pkt[4] = xorChecksum(pkt, 4);
+      const resp = await sendCommandAndWait(pkt, { dryRun: dom.dryRunCheck.checked });
+      log(`StopMotion 回應: ${bytesToHex(resp)}`, resp[2] === 0 ? 'l-ok' : 'l-err');
+    } catch (err) {
+      log(`StopMotion 失敗: ${err.message}`, 'l-err');
+    }
+  });
+
+  function setEmergencyButtonsEnabled(enabled) {
+    ['btnFree', 'btnHome', 'btnStopMotion', 'btnVoltage'].forEach(id => {
+      document.getElementById(id).disabled = !enabled;
+    });
+  }
+
+  // ---------- 進度 ----------
+  let totalSteps = 0;
+  let doneSteps = 0;
+
+  function resetProgress() {
+    doneSteps = 0;
+    totalSteps = 0;
+    dom.progressBar.style.width = '0%';
+    dom.progressBar.classList.remove('err');
+    dom.progressText.textContent = '0 / 0';
+    dom.progressPct.textContent = '0%';
+    setStep('閒置中');
+  }
+
+  function updateProgress() {
+    const pct = totalSteps ? Math.round((doneSteps / totalSteps) * 100) : 0;
+    dom.progressBar.style.width = pct + '%';
+    dom.progressText.textContent = `${doneSteps} / ${totalSteps}`;
+    dom.progressPct.textContent = pct + '%';
+  }
+
+  function markProgressError() {
+    dom.progressBar.classList.add('err');
+  }
+
+  // ---------- 上傳流程（跟原裝協議） ----------
+  function buildWriteMotionId(contentId) {
+    // 8 bytes: LEN=8, CMD=0x02, 0x00, 0x08, 0x00, idLo, idHi, checksum
+    const pkt = new Uint8Array(8);
+    pkt[0] = 8; pkt[1] = CMD_WRITE_MOTION_ID; pkt[2] = 0x00;
+    pkt[3] = 0x08; pkt[4] = 0x00;
+    pkt[5] = contentId & 0xFF;
+    pkt[6] = (contentId >> 8) & 0xFF;
+    pkt[7] = xorChecksum(pkt, 7);
+    return pkt;
+  }
+
+  function buildSaveMotionId() {
+    // 固定 4 bytes: 04 04 00 checksum
+    const pkt = new Uint8Array([4, CMD_SAVE_MOTION_ID, 0x00, 0]);
+    pkt[3] = xorChecksum(pkt, 3);
+    return pkt;
+  }
+
+  function buildWriteMotionData(inPageOffset, chunk) {
+    // 原裝格式: [LEN][CMD][reserved=0x00][addrLo][addrHi][data...][checksum]
+    // LEN = data.length + 6 (LEN,CMD,reserved,addrLo,addrHi,...data...,checksum)
+    const len = chunk.length + 6;
+    const pkt = new Uint8Array(len);
+    pkt[0] = len; pkt[1] = CMD_WRITE_MOTION_DATA;
+    pkt[2] = 0x00;  // reserved byte，跟原裝 WriteMotionData.java 一致
+    pkt[3] = inPageOffset & 0xFF;
+    pkt[4] = (inPageOffset >> 8) & 0xFF;
+    pkt.set(chunk, 5);
+    pkt[len - 1] = xorChecksum(pkt, len - 1);
+    return pkt;
+  }
+
+  function buildSaveMotionData(page) {
+    const pkt = new Uint8Array([5, CMD_SAVE_MOTION_DATA, 0x00, page, 0]);
+    pkt[4] = xorChecksum(pkt, 4);
+    return pkt;
+  }
+
+  function buildReadFlashBuffer(page) {
+    const pkt = new Uint8Array([5, CMD_READ_FLASH_BUFFER, 0x00, page, 0]);
+    pkt[4] = xorChecksum(pkt, 4);
+    return pkt;
+  }
+
+  function buildStartMotion(startPage) {
+    const pkt = new Uint8Array([5, CMD_START_STOP_MOTION, 0x00, startPage, 0]);
+    pkt[4] = xorChecksum(pkt, 4);
+    return pkt;
+  }
+
+  function errorBitmaskToText(mask) {
+    if (mask === 0) return 'OK';
+    const names = [];
+    if (mask & 0x01) names.push('ADDRESS');
+    if (mask & 0x02) names.push('LITERAL');
+    if (mask & 0x04) names.push('COMMAND');
+    if (mask & 0x08) names.push('SIZE');
+    if (mask & 0x10) names.push('COUNT');
+    if (mask & 0x20) names.push('DEVICE');
+    if (mask & 0x40) names.push('CHECK_SUM');
+    if (mask & 0x80) names.push('FLASH');
+    return names.length ? names.join(',') : `0x${mask.toString(16)}`;
+  }
+
+  async function uploadMotion() {
+    if (!motionData || !motionData.length) {
+      log('未讀取任何 .pma 檔案', 'l-warn');
+      return;
+    }
+    const dryRun = dom.dryRunCheck.checked;
+    if (!dryRun && !writer) {
+      log('未連接串口 — 請先連接，或勾選「模擬模式」', 'l-warn');
+      return;
+    }
+
+    const doVerify = dom.verifyCheck.checked;
+    const contentId = parseInt(dom.motionIdInput.value, 10) || 1;
+    const pagesNeeded = Math.ceil(motionData.length / PAGE_SIZE);
+
+    // 防禦性清空：如果之前有殘留嘅未消化 byte（例如舊 firmware 版本
+    // 或者其他未知來源嘅雜訊），喺呢度清走，避免污染接落嚟嘅 response
+    // parsing（今次修正咗 .ino 端唔會再有呢個殘留，但保留呢個防禦）。
+    if (rxBuf.length) {
+      log(`清走 rxBuf 殘留 ${rxBuf.length} bytes: ${bytesToHex(rxBuf)}`, 'l-warn');
+      rxBuf = [];
+    }
+
+    uploadCancelled = false;
+    uploadRunning = true;
+    dom.btnUpload.disabled = true;
+    dom.btnCancelUpload.disabled = false;
+    dom.btnStartMotion.disabled = true;
+
+    // 計算總步數：clear(2) + 逐 page(chunks + save + [verify]) + writeId(1) + saveId(1)
+    const chunksPerPage = (pageLen) => Math.ceil(pageLen / CHUNK_SIZE);
+    totalSteps = 2; // clear motion id (write+save 當一組 2 步)
+    for (let p = 0; p < pagesNeeded; p++) {
+      const pageLen = Math.min(PAGE_SIZE, motionData.length - p * PAGE_SIZE);
+      totalSteps += chunksPerPage(pageLen) + 1 + (doVerify ? 1 : 0);
+    }
+    totalSteps += 2; // write real id + save id
+    doneSteps = 0;
+    updateProgress();
+
+    try {
+      // ---- Step 1: Clear motion id (contentId=0xFFFF) ----
+      setStep('清空舊 motion id...');
+      log('=== 開始上傳流程 ===', 'l-step');
+      let resp = await sendCommandAndWait(buildWriteMotionId(0xFFFF), { dryRun });
+      checkFlashResponse(resp, 'WriteMotionId(清空)');
+      doneSteps++; updateProgress();
+      if (uploadCancelled) throw new Error('使用者取消');
+
+      resp = await sendCommandAndWait(buildSaveMotionId(), { dryRun });
+      checkFlashResponse(resp, 'SaveMotionId(清空)');
+      doneSteps++; updateProgress();
+      if (uploadCancelled) throw new Error('使用者取消');
+
+      // ---- Step 2: 逐 page 上傳 ----
+      for (let page = 0; page < pagesNeeded; page++) {
+        if (uploadCancelled) throw new Error('使用者取消');
+        const pageStart = page * PAGE_SIZE;
+        const pageLen = Math.min(PAGE_SIZE, motionData.length - pageStart);
+        const pageData = motionData.slice(pageStart, pageStart + pageLen);
+
+        setStep(`上傳 page ${page + 1}/${pagesNeeded}（${pageLen} bytes）...`);
+
+        // 分 128-byte chunk 送 WriteMotionData
+        for (let off = 0; off < pageLen; off += CHUNK_SIZE) {
+          if (uploadCancelled) throw new Error('使用者取消');
+          const chunk = pageData.slice(off, Math.min(off + CHUNK_SIZE, pageLen));
+          const pkt = buildWriteMotionData(off, chunk);
+          resp = await sendCommandAndWait(pkt, { dryRun });
+          checkFlashResponse(resp, `WriteMotionData(page=${page},off=${off})`);
+          doneSteps++; updateProgress();
+        }
+
+        // SaveMotionData(page) — 觸發真正 Flash erase+program
+        setStep(`寫入 page ${page + 1}/${pagesNeeded} 落 Flash...`);
+        resp = await sendCommandAndWait(buildSaveMotionData(page), { dryRun, timeoutMs: 3000 });
+        checkFlashResponse(resp, `SaveMotionData(page=${page})`);
+        doneSteps++; updateProgress();
+        if (uploadCancelled) throw new Error('使用者取消');
+
+        // ReadFlashBuffer(page) 校驗（可選）
+        if (doVerify) {
+          setStep(`校驗 page ${page + 1}/${pagesNeeded}...`);
+          resp = await sendCommandAndWait(buildReadFlashBuffer(page), { dryRun, timeoutMs: 2000 });
+          if (!dryRun) {
+            verifyPageData(resp, pageData, page);
+          }
+          doneSteps++; updateProgress();
+        }
+      }
+
+      // ---- Step 3: Write 真正 motion id + Save ----
+      setStep('登記 motion id...');
+      resp = await sendCommandAndWait(buildWriteMotionId(contentId), { dryRun });
+      checkFlashResponse(resp, 'WriteMotionId(真正ID)');
+      doneSteps++; updateProgress();
+
+      resp = await sendCommandAndWait(buildSaveMotionId(), { dryRun });
+      checkFlashResponse(resp, 'SaveMotionId(真正ID)');
+      doneSteps++; updateProgress();
+
+      setStep('✅ 上傳完成');
+      log(`=== 上傳完成：動作「${motionName}」，motionId=${contentId}，${pagesNeeded} pages ===`, 'l-ok');
+      dom.startPageInput.value = 0; // 呢個實作固定由 page 0 開始
+      dom.btnStartMotion.disabled = false;
+
+    } catch (err) {
+      markProgressError();
+      if (err.message === '使用者取消') {
+        setStep('已取消');
+        log('上傳已取消', 'l-warn');
+      } else {
+        setStep('❌ 上傳失敗');
+        log(`上傳失敗: ${err.message}`, 'l-err');
+      }
+    } finally {
+      uploadRunning = false;
+      dom.btnUpload.disabled = false;
+      dom.btnCancelUpload.disabled = true;
+    }
+  }
+
+  function checkFlashResponse(resp, label) {
+    if (!resp || resp.length < 4) {
+      throw new Error(`${label}: 回應長度不足 (收到 ${resp ? resp.length : 0} bytes: ${resp ? bytesToHex(resp) : ''})`);
+    }
+    const errBitmask = resp[2];
+    log(`${label} 原始回應: ${bytesToHex(resp)}`, 'l-tx');
+    if (errBitmask !== 0) {
+      throw new Error(`${label}: MCU 回報錯誤 [${errorBitmaskToText(errBitmask)}] (原始: ${bytesToHex(resp)})`);
+    }
+    log(`${label}: OK`, 'l-ok');
+  }
+
+  function verifyPageData(resp, expectedPageData, page) {
+    // resp = [0xFF][0x1C][1024 bytes][checksum]
+    if (!resp || resp.length < 1024 + 3) {
+      throw new Error(`ReadFlashBuffer(page=${page}): 回應長度不足 (${resp ? resp.length : 0})`);
+    }
+    const actualData = resp.slice(2, 2 + 1024);
+    for (let i = 0; i < expectedPageData.length; i++) {
+      if (actualData[i] !== expectedPageData[i]) {
+        throw new Error(`ReadFlashBuffer(page=${page}): 第 ${i} byte 唔啱 (期望 0x${expectedPageData[i].toString(16)}, 實際 0x${actualData[i].toString(16)})`);
+      }
+    }
+    log(`ReadFlashBuffer(page=${page}): 校驗通過 ✓`, 'l-ok');
+  }
+
+  function cancelUpload() {
+    if (uploadRunning) {
+      uploadCancelled = true;
+      log('正在取消上傳...', 'l-warn');
+    }
+  }
+
+  dom.btnUpload.addEventListener('click', uploadMotion);
+  dom.btnCancelUpload.addEventListener('click', cancelUpload);
+
+  // ---------- StartMotion ----------
+  dom.btnStartMotion.addEventListener('click', async () => {
+    const dryRun = dom.dryRunCheck.checked;
+    if (!dryRun && !writer) { log('未連接串口', 'l-warn'); return; }
+
+    const startPage = parseInt(dom.startPageInput.value, 10) || 0;
+    try {
+      const pkt = buildStartMotion(startPage);
+      const resp = await sendCommandAndWait(pkt, { dryRun });
+      checkFlashResponse(resp, `StartMotion(page=${startPage})`);
+      log(`▶️ 開始播放，由 page ${startPage} 開始（MCU 自主播放，網頁唔再控制節奏）`, 'l-ok');
+    } catch (err) {
+      log(`StartMotion 失敗: ${err.message}`, 'l-err');
+    }
+  });
+
+  checkSupport();
+})();
+</script>
+</body>
+</html>
