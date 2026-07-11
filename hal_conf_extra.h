@@ -1,22 +1,23 @@
 // hal_conf_extra.h
 //
-// 呢個檔案要同 Pre-maiduino2.ino 放喺同一個 sketch 資料夾。
-// STM32duino core 嘅 stm32yyxx_hal_conf.h 會自動 __has_include 呢個
-// 檔案名並 #include 佢，令下面嘅 #define 喺編譯 HardwareSerial.cpp（核心
-// 庫本身，獨立編譯單元）嗰陣真正生效——喺 .ino 度寫 #define 冧唔到，
-// 因為 .ino 會被轉做另一個 .cpp 檔案編譯，同核心庫唔係同一個編譯單元。
+// 呢個檔案要放喺 sketch 資料夾入面（同 .ino 同一層），Arduino_Core_STM32
+// 先會揀到。單單喺 .ino 度 #define SERIAL_RX_BUFFER_SIZE 冇用——
+// HardwareSerial.cpp 係獨立編譯單元，佢 include 呢個檔案嘅時機早過
+// .ino 嘅 define，所以必須用呢個機制先蓋得到預設值。
 //
-// 背景：STM32duino 嘅 HardwareSerial RX buffer 預設淨係 64 byte，但
-// Unity/PC 端 continuousMode 送嘅 0x18 多軸角度封包（25隻servo全部）
-// 可達 80 byte，單一個封包已經超過預設 buffer 容量，封包送到一半
-// buffer 爆滿，之後嘅 byte 被硬件丟棄，令接收端讀到殘缺封包、
-// checksum 永遠對唔上。加大 buffer 到 256 byte，足夠緩衝 3 個完整
-// 封包，解決呢個問題。
+// 背景：一個 .pma binary packet 最大 100 bytes（PMA_PKT_MAX_LEN），
+// 而 Arduino_Core_STM32 預設 SERIAL_RX_BUFFER_SIZE 淨係 64 bytes。
+// 當 sender（例如網頁版 BT sender）連續送 packet，MCU 呢邊如果因為
+// 逐隻 servo 做 ICS bus read/write（每隻都可能要 1ms timeout + retry）
+// 而黎唔切喺 loop() 入面清 UART data，software ring buffer 好快
+// 爆滿，導致中間 byte 被丟棄——協議狀態機（pmaRecvState）可能永久
+// 卡喺 PMA_RECV_BODY 等一個唔會再嚟嘅 byte，令機械人「行到一半完全
+// 定住」，睇落好似死機，其實只係 UART 協議層面卡死。
+//
+// 加大到 512 bytes：足夠緩衝多個 packet 排隊等處理，爭取返
+// pmaReceiveUpdate() 追得上嘅時間差。
 
-#if !defined(SERIAL_TX_BUFFER_SIZE)
-#define SERIAL_TX_BUFFER_SIZE 256
-#endif
+#pragma once
 
-#if !defined(SERIAL_RX_BUFFER_SIZE)
-#define SERIAL_RX_BUFFER_SIZE 256
-#endif
+#define SERIAL_RX_BUFFER_SIZE 512
+#define SERIAL_TX_BUFFER_SIZE 512

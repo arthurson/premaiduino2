@@ -1,22 +1,8 @@
 
-// STM32duino 嘅 HardwareSerial RX buffer 預設淨係 64 byte，但 Unity/PC
-// 端 continuousMode 送嘅 0x18 多軸角度封包（25隻servo全部）係 80 byte，
-// 單一個封包已經超過預設 buffer 容量！封包送到一半 buffer 爆滿，
-// 之後嘅 byte 會被硬件丟棄，令 parser 讀到殘缺封包，checksum 永遠
-// 對唔上——呢個先係 continuousMode 完全冇反應嘅根本原因。
-//
-// 注意：唔可以淨係喺呢個 .ino 度寫 #define SERIAL_RX_BUFFER_SIZE。
-// Arduino IDE 會將 .ino 轉做 .cpp 編譯，但 HardwareSerial.cpp（STM32
-// core 本身）係獨立編譯單元，唔會睇到呢度嘅 #define。要生效必須喺
-// 同一個 sketch 資料夾新增一個名叫 hal_conf_extra.h 嘅檔案，STM32
-// core 會自動 #include 佢去覆蓋核心庫嘅編譯設定。呢個 .ino 已經另外
-// 建立咗 hal_conf_extra.h，內容已經加大 buffer 到 256 byte。
 
 #include <Arduino.h>
-#include <math.h>  // table_walk.c 需要 fabsf()
+#include <math.h>  
 
-// PA3/PB11 為 NC，冇實體 RX 線，ICS bus 係單線半雙工，必須用
-// half-duplex 單 pin constructor（唔可以用普通雙 pin full-duplex）
 HardwareSerial Serial2(PA2);
 HardwareSerial Serial3(PB10);
 
@@ -37,8 +23,8 @@ HardwareSerial Serial3(PB10);
 #include "MPU6050IMU.h"
 
 // ===== 建立兩個通訊物件 =====
-IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 1);
-IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 1);
+IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 10);
+IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 10);
 
 // ===== 速度定義 =====
 #define DEFAULT_SPEED_HV 127  // HV 伺服速度 (原廠設定值)
@@ -94,9 +80,9 @@ ServoInfo servoList[] = {
   // ===== MV群 (上半身) - binaryID 21-31 =====
   { 21, 1, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部前後", 7200, 8400, false, true, 7500 },
   { 22, 2, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部轉向", 5000, 10000, false, true, 7500 },
-  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, false, 7500 },  // 未駁線
-  { 24, 4, 9800, 9800, DEFAULT_SPEED_MV, &icsMV, "右肩側擺", 7450, 10350, false, true, 9500 },  // 官方中立值非7500
-  { 25, 5, 5200, 5200, DEFAULT_SPEED_MV, &icsMV, "左肩側擺", 4550, 7550, false, true, 5500 },   // 官方中立值非7500
+  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, true, 7500 },  // 未駁線
+  { 24, 4, 9500, 9500, DEFAULT_SPEED_MV, &icsMV, "右肩側擺", 7450, 10350, false, true, 9500 },  // 官方中立值非7500
+  { 25, 5, 5500, 5500, DEFAULT_SPEED_MV, &icsMV, "左肩側擺", 4550, 7550, false, true, 5500 },   // 官方中立值非7500
   { 26, 6, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右臂轉向", 4000, 11000, false, true, 7500 },
   { 27, 7, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "左臂轉向", 4000, 11000, false, true, 7500 },
   { 28, 8, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右肘屈伸", 7100, 11000, false, true, 7500 },
@@ -112,8 +98,8 @@ String inputBuffer = "";
 
 // 最近一次有 servo 動作嘅時間戳（safeSetPos() 更新）。
 // 俾 loop() 用嚟判斷而家係咪「有動作進行緊」，決定 LED 顯示忙碌
-// 提示定係待機呼吸燈。未來加 .pma player 都會經 safeSetPos()，
-// 唔使再逐個功能加 LED code。
+// 提示定係待機呼吸燈。table_walk/.pma player 都經 safeSetPos()，
+// 唔使逐個功能加 LED code。
 unsigned long lastActivityMs = 0;
 
 // FREE ALL 之後進入「脫力模式」，LED 顯示紫色，直到下次有 servo 動作
@@ -273,32 +259,15 @@ void tableWalkSafeStop() {
 // 接收用非阻塞狀態機，逐 byte 喺 loop() 度儲，唔用 while(available()<N)
 // 阻塞等待，避免藍牙傳輸未到齊時卡住 LED/電壓監察/IMU 等其他工作。
 
-#define PMA_PKT_MAX_LEN 100  // 已實測 10 個真實檔案 LEN 上限 80，留少少餘量
-#define PMA_DEBUG_TRACK_ID 0x02  // 診斷用：追蹤呢個 pmaID 嘅角度值(0x02=HV1/右肩ピッチ)，
-                                  // 方便同你郁緊嘅 Unity slider 直接對照
+#define PMA_PKT_MAX_LEN 100  // 已實測真實 .pma 檔案 LEN 上限 80，留少少餘量
 
 enum PmaRecvState { PMA_RECV_IDLE, PMA_RECV_BODY };
 PmaRecvState pmaRecvState = PMA_RECV_IDLE;
 uint8_t pmaPktBuf[PMA_PKT_MAX_LEN];
 uint8_t pmaPktLen = 0;      // 呢個封包嘅目標長度（第一個 byte）
 uint8_t pmaPktFilled = 0;   // 已經收到幾多個 byte（含 LEN 自己）
-unsigned long lastPmaChecksumWarnMs = 0;  // (保留，暫未使用)
 unsigned long pmaPacketOkCount = 0;    // 成功執行嘅封包累計數，用 "PMASTAT" 查
-unsigned long pmaPacketFailCount = 0;  // checksum 錯誤嘅封包累計數
-uint8_t pmaLastFailLen = 0;      // 最後一個失敗封包嘅 LEN
-uint8_t pmaLastFailCmd = 0;      // 最後一個失敗封包嘅 CMD
-uint8_t pmaLastFailCalc = 0;     // 最後一個失敗封包計算出嚟嘅 checksum
-uint8_t pmaLastFailParity = 0;   // 最後一個失敗封包實際收到嘅 parity byte
-uint8_t pmaLastFailBytes[PMA_PKT_MAX_LEN];  // 最後一個失敗封包嘅完整內容快照
-uint8_t pmaLastFailBytesLen = 0;            // 快照實際長度
-unsigned long pmaPktStartMs = 0;            // 開始接收目前封包嘅時間戳
-unsigned long pmaLastFailDurationMs = 0;    // 最後一個失敗封包，由開始到收齊耗用嘅時間
-uint8_t pmaLenHistory[5] = {0};             // 最近 5 次收到嘅 LEN 值
-uint8_t pmaLenHistoryIdx = 0;               // 循環寫入位置
-unsigned long pmaLenientAcceptCount = 0;    // 寬鬆模式接受咗嘅封包數（checksum錯但結構完整）
-uint8_t pmaLastCmd18FirstId = 0;      // 最後一次 0x18 封包，第一隻servo嘅 pmaID
-uint16_t pmaLastCmd18FirstAngle = 0;  // 最後一次 0x18 封包，第一隻servo嘅角度值（原始，未經home offset）
-unsigned long pmaCmd18Count = 0;      // 總共收到幾多次 0x18 封包
+unsigned long pmaPacketFailCount = 0;  // checksum 錯誤（且結構唔完整）嘅封包累計數
 
 // 由 pma-style servoID 轉做角度，經 applyHomeOffset 轉換基準後送出。
 // baselineCenter 用返嗰隻 servo 自己嘅官方中立值（大部分係 7500，
@@ -351,16 +320,11 @@ static void pmaHandleCmd18(const uint8_t *payload, uint8_t payloadLen) {
     tw_walker_init(&tableWalker);  // 強制歸零、即時停，唔送 home 指令
                                      // （.pma 封包自己會送角度，唔需要多餘一次 home）
   }
-  pmaCmd18Count++;
   for (uint8_t i = 2; i + 2 < payloadLen; i += 3) {
     uint8_t pmaId = payload[i];
     uint16_t lo = payload[i + 1];
     uint16_t hi = payload[i + 2];
     uint16_t angle = (hi << 8) | lo;
-    if (pmaId == PMA_DEBUG_TRACK_ID) {  // 追蹤指定嘅 pmaID，方便對照你郁緊嗰條 slider
-      pmaLastCmd18FirstId = pmaId;
-      pmaLastCmd18FirstAngle = angle;
-    }
     pmaApplyServoAngle(pmaId, angle);
   }
 }
@@ -382,7 +346,26 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len) {
 // 由 loop() 每次 iteration call 一次；逐 byte 儲入 buffer，
 // 儲夠一個完整封包先驗 checksum 同執行，然後重置去等下一個封包。
 void pmaReceiveUpdate() {
-  while (Serial1.available() > 0) {
+  // 注意：呢度故意唔用 "while (Serial1.available() > 0)" 一路清到冧晒為止。
+  //
+  // 根本原因：一個 0x18 封包最多可以帶 21 隻 servo，pmaExecutePacket()
+  // 會逐隻 servo 真實做 ICS bus 讀寫（半雙工 + 1ms timeout + retry-once），
+  // 21 隻走完隨時要 20~40ms。如果呢段時間內 sender 端（例如網頁版 BT
+  // sender）已經連續送緊下一個封包嘅 byte，STM32 硬件 UART RX FIFO
+  // 得幾個 byte 深，好快爆滿，導致中間 byte 被丟棄或者覆蓋。
+  //
+  // 一旦漏咗一個 byte，狀態機可能停留喺 PMA_RECV_BODY 永久等一個
+  // 唔會再嚟嘅 byte（因為 pmaPktFilled 永遠追唔上 pmaPktLen），
+  // 令機械人「行到一半完全定住」——呢個唔係死機，而係 UART 協議層面
+  // 卡死，冇任何 ASCII 指令可以打斷佢，睇落好似要重開電源先解決。
+  //
+  // 修法：每次 call pmaReceiveUpdate() 最多完整處理一個 packet 就
+  // return，將處理 servo write 嘅時間攤分返去下一次 loop() iteration，
+  // 中間畀 UART 硬件 FIFO 有機會被清走，避免爆 buffer。
+  uint8_t packetsProcessedThisCall = 0;
+  const uint8_t MAX_PACKETS_PER_CALL = 1;
+
+  while (Serial1.available() > 0 && packetsProcessedThisCall < MAX_PACKETS_PER_CALL) {
     uint8_t b = Serial1.peek();
 
     if (pmaRecvState == PMA_RECV_IDLE) {
@@ -436,11 +419,6 @@ void pmaReceiveUpdate() {
       if (looksLikePmaPacket) {
         pmaPktLen = peekLen;
         pmaRecvState = PMA_RECV_BODY;
-        pmaPktStartMs = millis();  // 記低開始收呢個封包嘅時間，診斷傳輸節奏用
-        // 記低最近 5 次收到嘅 LEN 值，方便睇係咪每次都固定同一個數值
-        // （固定 = Unity 本身送緊呢個長度；隨機/多變 = 傳輸過程有損失）
-        pmaLenHistory[pmaLenHistoryIdx % 5] = peekLen;
-        pmaLenHistoryIdx++;
       } else {
         // 唔係 binary 封包，peekLen 呢個 byte 其實係普通 ASCII 字元
         char c = (char)peekLen;
@@ -463,14 +441,12 @@ void pmaReceiveUpdate() {
         }
         uint8_t parity = pmaPktBuf[pmaPktLen - 1];
 
-        // 寬鬆驗證：已經反覆證實 Unity（kazz 版 continuousMode）本身
-        // 冇正確計算 checksum，一律送出 0x00 佔位值，並非傳輸損毀
-        // ——多次觀察 pmaLenHistory 全部固定 68，payload 內容完全自洽
-        // （21 隻 servo，全部係已知合理 ID，數值都喺正常角度範圍），
-        // 純粹係 Unity 端限制。為咗實際可用，容許 recv==0x00 且
-        // payload 結構完整（扣除 LEN/CMD/保留位/SPD/checksum 之後,
-        // 剩餘 byte 啱啱好整除 3）嘅封包照樣執行，其餘 checksum 錯誤
-        // 仍然拒絕。
+        // 寬鬆驗證：Unity 官方 App（continuousMode）本身唔會正確計算
+        // checksum，固定送出 0x00 佔位值，並非傳輸損毀——payload 內容
+        // 本身完全自洽（合理嘅 servo ID、正常角度範圍）。容許
+        // recv==0x00 且 payload 結構完整（扣除 LEN/CMD/保留位/SPD/
+        // checksum 之後，剩餘 byte 啱啱好整除 3）嘅封包照樣執行，
+        // 其餘 checksum 唔啱嘅封包仍然拒絕。
         bool structurallyValid = (pmaPktLen >= 8) && ((pmaPktLen - 5) % 3 == 0);
         bool passedChecksum = (xorCalc == parity);
         bool passedLenientMode = (parity == 0x00) && structurallyValid;
@@ -478,28 +454,23 @@ void pmaReceiveUpdate() {
         if (passedChecksum || passedLenientMode) {
           pmaExecutePacket(pmaPktBuf, pmaPktLen);
           pmaPacketOkCount++;
-          if (!passedChecksum) pmaLenientAcceptCount++;
         } else {
-          // 唔即時 print——Serial1.print 阻塞式送出，成句 UTF-8 warning
-          // 要幾十毫秒，同 continuousMode 高頻封包、電壓監察等其他
-          // Serial1.print 撞埋一齊時，阻塞時間疊加，令 RX buffer 嘅
-          // 下一個封包到達期間被覆蓋/延誤，造成「一錯就雪崩、成串
-          // checksum 錯」。改為淨係計數 + 保留最後一個失敗封包嘅內容
-          // 快照，用 "PMASTAT" 指令按需查詢，唔喺 loop() 入面即時噴。
           pmaPacketFailCount++;
-          pmaLastFailLen = pmaPktLen;
-          pmaLastFailCmd = pmaPktBuf[1];
-          pmaLastFailCalc = xorCalc;
-          pmaLastFailParity = parity;
-          pmaLastFailBytesLen = pmaPktLen;
-          pmaLastFailDurationMs = millis() - pmaPktStartMs;
-          for (uint8_t d = 0; d < pmaPktLen; d++) {
-            pmaLastFailBytes[d] = pmaPktBuf[d];
-          }
         }
 
         pmaRecvState = PMA_RECV_IDLE;
         pmaPktFilled = 0;
+        packetsProcessedThisCall++;  // 呢個 packet（可能耗時 20~40ms）處理完，
+                                      // 即刻 return 返去 loop()，等 UART FIFO 有機會被清
+
+        // 回送 1-byte ACK：0x06（ASCII ACK）代表呢個 packet 已經完整
+        // 執行完（包括所有 servo write）。Sender 端可以揀跟呢個 ACK
+        // 嚟做 flow control（收到先送下一個），而唔係淨係計 SPD tick
+        // 估時間——因為真實 servo write 所需時間可能同 SPD tick
+        // 假設唔一致，盲目照送會累積令 RX buffer 谷爆。
+        // 冇支援 ACK 嘅 sender（例如舊版 python script）唔會理呢個
+        // byte，唔影響相容性。
+        Serial1.write((uint8_t)0x06);
       }
     }
   }
@@ -1140,41 +1111,7 @@ void processCommand(String cmd) {
     Serial1.print(F("📊 .pma 封包統計: 成功="));
     Serial1.print(pmaPacketOkCount);
     Serial1.print(F(" 失敗="));
-    Serial1.print(pmaPacketFailCount);
-    Serial1.print(F(" 寬鬆接受="));
-    Serial1.println(pmaLenientAcceptCount);
-    Serial1.print(F("最近5次LEN: "));
-    for (uint8_t k = 0; k < 5; k++) {
-      Serial1.print(pmaLenHistory[k]);
-      Serial1.print(' ');
-    }
-    Serial1.println();
-    Serial1.print(F("0x18封包總數="));
-    Serial1.print(pmaCmd18Count);
-    Serial1.print(F(" 追蹤pmaID=0x"));
-    Serial1.print(PMA_DEBUG_TRACK_ID, HEX);
-    Serial1.print(F(" 最後角度="));
-    Serial1.println(pmaLastCmd18FirstAngle);
-    if (pmaLastFailBytesLen > 0) {
-      Serial1.print(F("最後失敗封包 LEN="));
-      Serial1.print(pmaLastFailLen);
-      Serial1.print(F(" CMD="));
-      Serial1.print(pmaLastFailCmd, HEX);
-      Serial1.print(F(" calc="));
-      Serial1.print(pmaLastFailCalc, HEX);
-      Serial1.print(F(" recv="));
-      Serial1.print(pmaLastFailParity, HEX);
-      Serial1.print(F(" 接收耗時="));
-      Serial1.print(pmaLastFailDurationMs);
-      Serial1.println(F("ms"));
-      Serial1.print(F("bytes="));
-      for (uint8_t d = 0; d < pmaLastFailBytesLen; d++) {
-        if (pmaLastFailBytes[d] < 0x10) Serial1.print('0');
-        Serial1.print(pmaLastFailBytes[d], HEX);
-        Serial1.print(' ');
-      }
-      Serial1.println();
-    }
+    Serial1.println(pmaPacketFailCount);
   } else if (cmd == "IMU") {
     if (!imuData.present) {
       Serial1.println(F("⚠️ IMU 未偵測到"));
