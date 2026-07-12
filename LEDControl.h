@@ -82,33 +82,6 @@ inline void setLEDOff() {
   setLEDRaw(false, false, false);
 }
 
-// 呼吸燈：以「邏輯顏色」做輸入（0=R, 1=G, 2=B），內部自動處理
-// active-low + 腳位移位，同 setLEDRed()/Green()/Blue() 用同一套校正。
-// analogWrite() 嘅 duty cycle 喺 active-low 電路下要反轉：
-// brightness=255（最光）要輸出 duty=0（即大部分時間 LOW）。
-inline int ledPhysicalPin(int logicalColor) {
-  // logicalColor: 0=R, 1=G, 2=B
-  switch (logicalColor) {
-    case 0: return LED_PHYS_R_PIN;
-    case 1: return LED_PHYS_G_PIN;
-    case 2: return LED_PHYS_B_PIN;
-    default: return -1;
-  }
-}
-
-inline void breathLED(int logicalColor, int speed) {
-  int pin = ledPhysicalPin(logicalColor);
-  if (pin < 0) return;
-  for (int brightness = 0; brightness <= 255; brightness++) {
-    analogWrite(pin, 255 - brightness);  // active-low: 反轉 duty cycle
-    delay(speed);
-  }
-  for (int brightness = 255; brightness >= 0; brightness--) {
-    analogWrite(pin, 255 - brightness);
-    delay(speed);
-  }
-}
-
 // 非阻塞式呼吸燈：每次 call 淨係更新一格 brightness，唔會 delay()。
 // 用喺 loop() 入面持續 call，唔會擋住 command 處理。
 // r_on/g_on/b_on: 邊隻 channel 參與呼吸（同 setLEDRaw() 同一套介面），
@@ -134,11 +107,6 @@ inline void breathLEDRaw(bool r_on, bool g_on, bool b_on, unsigned long period_m
   analogWrite(LED_PHYS_B_PIN, b_on ? duty : 255);
 }
 
-// 舊介面：以「邏輯顏色」做輸入（0=R, 1=G, 2=B），內部轉去 breathLEDRaw()
-inline void breathLEDNonBlocking(int logicalColor, unsigned long period_ms) {
-  breathLEDRaw(logicalColor == 0, logicalColor == 1, logicalColor == 2, period_ms);
-}
-
 inline void breathLEDRedNB(unsigned long period_ms)    { breathLEDRaw(true,  false, false, period_ms); }
 inline void breathLEDGreenNB(unsigned long period_ms)  { breathLEDRaw(false, true,  false, period_ms); }
 inline void breathLEDBlueNB(unsigned long period_ms)   { breathLEDRaw(false, false, true,  period_ms); }
@@ -146,37 +114,5 @@ inline void breathLEDYellowNB(unsigned long period_ms) { breathLEDRaw(true,  tru
 inline void breathLEDCyanNB(unsigned long period_ms)   { breathLEDRaw(false, true,  true,  period_ms); }
 inline void breathLEDPurpleNB(unsigned long period_ms) { breathLEDRaw(true,  false, true,  period_ms); }
 inline void breathLEDWhiteNB(unsigned long period_ms)  { breathLEDRaw(true,  true,  true,  period_ms); }
-
-// ===== 手動呼吸色選擇（俾 LED RED/GREEN/BLUE/... 指令用）=====
-// LED RED/GREEN/BLUE/YELLOW/CYAN/PURPLE/WHITE 呢啲指令而家全部都係
-// 觸發對應顏色嘅呼吸效果，而唔係穩定色。因為呼吸係非阻塞、要逐格更新
-// brightness，所以用呢個 index 記住「而家揀緊邊隻色」，
-// loop() 度要不斷 call updateManualBreathLED() 先會郁。
-// -1 = 冇手動選色（LED OFF 或者未曾揀過）
-inline int manualBreathColorIndex = -1;
-#define MANUAL_BREATH_PERIOD_MS 2000  // 手動測試呼吸嘅完整週期
-
-// colorIndex: 0=紅 1=綠 2=藍 3=黃 4=青 5=紫 6=白
-inline void updateManualBreathLED() {
-  if (manualBreathColorIndex < 0) return;
-  switch (manualBreathColorIndex) {
-    case 0: breathLEDRedNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 1: breathLEDGreenNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 2: breathLEDBlueNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 3: breathLEDYellowNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 4: breathLEDCyanNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 5: breathLEDPurpleNB(MANUAL_BREATH_PERIOD_MS); break;
-    case 6: breathLEDWhiteNB(MANUAL_BREATH_PERIOD_MS); break;
-  }
-}
-
-// 測試用 helper：由顏色名（"RED"/"GREEN"/"BLUE"）攞返對應「邏輯顏色」
-// 編號（0/1/2），俾 LED 測試指令 (LED BREATH/BRIGHT) 共用
-inline int ledPinByName(const String &colorName) {
-  if (colorName == "RED") return 0;
-  if (colorName == "GREEN") return 1;
-  if (colorName == "BLUE") return 2;
-  return -1;
-}
 
 #endif

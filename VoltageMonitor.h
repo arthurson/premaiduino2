@@ -36,10 +36,9 @@ struct VoltageData {
 
 inline VoltageData voltageData;
 
-// 手動 LED 測試模式開關：true 時 checkVoltage() 唔會自動改動 LED 顏色，
-// 俾 LED 測試指令 (LED RED/GREEN/BLUE/...) 可以穩定顯示，唔會被電壓
-// 監測每 5 秒一次嘅自動 setLEDBlue()/setLEDRed() 覆蓋。
-// 由 processCommand() 嘅 LED 指令 set 做 true；打 LED AUTO 先返做 false。
+// 手動 LED 覆蓋開關：true 時 checkVoltage()/updateActivityLED() 唔會自動
+// 改動 LED 顏色。目前俾 IMU 開機自動校正用（校正嗰刻閃白燈，唔俾狀態燈
+// 干擾），校正完會自動設返 false，交返俾 updateActivityLED() 判斷。
 inline bool ledManualOverride = false;
 
 // ===== 電壓檢查函式 =====

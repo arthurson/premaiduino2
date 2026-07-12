@@ -39,8 +39,8 @@ HardwareSerial Serial3(PB10);
 #include "MPU6050IMU.h"
 
 // ===== 建立兩個通訊物件 =====
-IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 1);
-IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 1);
+IcsHardSerialClass icsHV(&Serial2, EN_HV_PIN, 1250000, 10);
+IcsHardSerialClass icsMV(&Serial3, EN_MV_PIN, 1250000, 10);
 
 // ===== 速度定義 =====
 #define DEFAULT_SPEED_HV 127  // HV 伺服速度 (原廠設定值)
@@ -135,12 +135,10 @@ bool imuGyroCalibrated = false;   // 開機自動校正係咪已經做咗（做�
 // ===== 函式原型 =====
 void initServos();
 void moveAllServosToHome();
-void safeStop();
 void processCommand(String cmd);
 void showHelp();
 
 bool processASCIICommand(String cmd);
-bool processMultiCommand(String cmd);
 bool processFreeCommand(String cmd);
 ServoInfo *findServoByBinaryID(uint8_t binaryID);
 bool safeSetPos(ServoInfo *servo, uint16_t pos);
@@ -494,7 +492,7 @@ static void motionPlaybackUpdate() {
   uint8_t pkt[MOTION_FLASH_PAGE_SIZE > 255 ? 255 : MOTION_FLASH_PAGE_SIZE];
   uint8_t len = motionFlashReadNextPacket(pkt);
   if (len == 0) {
-    motionPlayState = MOTION_PLAY_IDLE;  // 動作播放完
+    motionPlayState = MOTION_PLAY_IDLE;  // 動作播放完（讀到 0xFF/0x00 結尾標記）
     return;
   }
 
@@ -762,7 +760,7 @@ void pmaReceiveUpdate() {
   // 注意：呢度故意唔用 "while (Serial1.available() > 0)" 一路清到冧晒為止。
   //
   // 根本原因：一個 0x18 封包最多可以帶 21 隻 servo，pmaExecutePacket()
-  // 會逐隻 servo 真實做 ICS bus 讀寫（半雙工 + 1ms timeout + retry-once），
+  // 會逐隻 servo 真實做 ICS bus 讀寫（半雙工 + 10ms timeout + retry-once），
   // 21 隻走完隨時要 20~40ms。如果呢段時間內 sender 端（例如網頁版 BT
   // sender）已經連續送緊下一個封包嘅 byte，STM32 硬件 UART RX FIFO
   // 得幾個 byte 深，好快爆滿，導致中間 byte 被丟棄或者覆蓋。
@@ -1145,114 +1143,11 @@ bool processFreeCommand(String cmd) {
   return true;
 }
 
-// ===== 處理多軸同步指令 (ASCII 版) =====
-bool processMultiCommand(String cmd) {
-  cmd.trim();
-
-  if (!cmd.startsWith("S MULTI ")) return false;
-
-  String params = cmd.substring(8);
-  params.trim();
-
-  int firstSpace = params.indexOf(' ');
-  if (firstSpace <= 0) return false;
-
-  int speed = params.substring(0, firstSpace).toInt();
-  if (speed < 1) speed = 1;      // IcsBaseClass::MIN_1 = 1，唔係 0
-  if (speed > 127) speed = 127;
-
-  String rest = params.substring(firstSpace + 1);
-  rest.trim();
-
-  int secondSpace = rest.indexOf(' ');
-  if (secondSpace <= 0) return false;
-
-  int count = rest.substring(0, secondSpace).toInt();
-  if (count < 1 || count > 25) {
-    Serial1.println(F("❌ 數量錯誤 (1-25)"));
-    return true;
-  }
-
-  String data = rest.substring(secondSpace + 1);
-  data.trim();
-
-  int idCount = 0;
-  int index = 0;
-
-  while (idCount < count && index < data.length()) {
-    int spacePos = data.indexOf(' ', index);
-    if (spacePos < 0) spacePos = data.length();
-
-    String idStr = data.substring(index, spacePos);
-    idStr.trim();
-    index = spacePos + 1;
-
-    if (idStr.length() < 3) break;
-
-    int binaryId = idStr.substring(2).toInt();
-
-    spacePos = data.indexOf(' ', index);
-    if (spacePos < 0) spacePos = data.length();
-
-    index = spacePos + 1;
-    ServoInfo *servo = findServoByBinaryID(binaryId);
-
-    if (servo != NULL) {
-      safeSetSpd(servo, speed);
-      servo->currentSpeed = speed;
-    }
-
-    idCount++;
-  }
-
-  delay(5);
-
-  idCount = 0;
-  index = 0;
-
-  while (idCount < count && index < data.length()) {
-    int spacePos = data.indexOf(' ', index);
-    if (spacePos < 0) spacePos = data.length();
-
-    String idStr = data.substring(index, spacePos);
-    idStr.trim();
-    index = spacePos + 1;
-
-    if (idStr.length() < 3) break;
-
-    int binaryId = idStr.substring(2).toInt();
-
-    spacePos = data.indexOf(' ', index);
-    if (spacePos < 0) spacePos = data.length();
-
-    int angle = data.substring(index, spacePos).toInt();
-    index = spacePos + 1;
-
-    ServoInfo *servo = findServoByBinaryID(binaryId);
-
-    if (servo != NULL) {
-      if (angle >= servo->minAngle && angle <= servo->maxAngle) {
-        safeSetPos(servo, angle);
-        servo->currentTunePos = angle;
-      }
-    }
-
-    idCount++;
-  }
-
-  setLEDGreen();
-  delay(20);
-  setLEDBlue();
-
-  return true;
-}
-
 // ===== 處理ASCII指令 =====
 bool processASCIICommand(String cmd) {
   cmd.trim();
 
   if (cmd.startsWith("FREE ")) return processFreeCommand(cmd);
-  if (cmd.startsWith("S MULTI ")) return processMultiCommand(cmd);
 
   if (cmd.startsWith("S ")) {
     int firstSpace = cmd.indexOf(' ');
@@ -1483,7 +1378,6 @@ void setup() {
 void loop() {
   checkVoltage();
   updateActivityLED();
-  updateManualBreathLED();
 
   // table_walk 用固定 tick 驅動（唔似原本 WalkGenerator 咁連續時間積分）
   unsigned long nowTick = millis();
@@ -1526,7 +1420,6 @@ void loop() {
     lastImuUpdateMs = nowImuTick;
     imuUpdate();
   }
-
 }
 
 // ===== 命令處理 =====
@@ -1583,101 +1476,6 @@ void processCommand(String cmd) {
   } else if (cmd == "FREE ALL") {
     tableWalkSafeStop();
     processFreeCommand("FREE ALL");
-  }
-  // ===== LED 測試指令 =====
-  else if (cmd == "LED RED") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 0;
-    Serial1.println(F("✅ LED = 紅（呼吸）"));
-  } else if (cmd == "LED GREEN") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 1;
-    Serial1.println(F("✅ LED = 綠（呼吸）"));
-  } else if (cmd == "LED BLUE") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 2;
-    Serial1.println(F("✅ LED = 藍（呼吸）"));
-  } else if (cmd == "LED YELLOW") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 3;
-    Serial1.println(F("✅ LED = 黃（呼吸）"));
-  } else if (cmd == "LED CYAN") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 4;
-    Serial1.println(F("✅ LED = 青（呼吸）"));
-  } else if (cmd == "LED PURPLE") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 5;
-    Serial1.println(F("✅ LED = 紫（呼吸）"));
-  } else if (cmd == "LED WHITE") {
-    ledManualOverride = true;
-    manualBreathColorIndex = 6;
-    Serial1.println(F("✅ LED = 白（呼吸）"));
-  } else if (cmd == "LED OFF") {
-    ledManualOverride = true;
-    manualBreathColorIndex = -1;
-    setLEDOff();
-    Serial1.println(F("✅ LED = 關"));
-  } else if (cmd == "LED AUTO") {
-    ledManualOverride = false;
-    manualBreathColorIndex = -1;
-    Serial1.println(F("✅ LED 恢復自動模式（電壓狀態顯示）"));
-  } else if (cmd.startsWith("LED BREATH ")) {
-    // 格式: LED BREATH <RED|GREEN|BLUE> <speed(ms)> [次數]
-    String args = cmd.substring(11);
-    args.trim();
-    int sp1 = args.indexOf(' ');
-    if (sp1 < 0) {
-      Serial1.println(F("❌ 格式錯誤，用法: LED BREATH <RED/GREEN/BLUE> <速度ms> [次數]"));
-    } else {
-      String colorName = args.substring(0, sp1);
-      String rest = args.substring(sp1 + 1);
-      rest.trim();
-      int sp2 = rest.indexOf(' ');
-      int speed = (sp2 > 0) ? rest.substring(0, sp2).toInt() : rest.toInt();
-      int cycles = (sp2 > 0) ? rest.substring(sp2 + 1).toInt() : 1;
-      speed = constrain(speed, 1, 100);
-      cycles = constrain(cycles, 1, 20);
-
-      int pin = ledPinByName(colorName);
-      if (pin < 0) {
-        Serial1.println(F("❌ 顏色錯誤，用: RED/GREEN/BLUE"));
-      } else {
-        ledManualOverride = true;
-        manualBreathColorIndex = -1;  // 呢個測試用阻塞式 breathLED()，唔經過手動呼吸機制
-        Serial1.print(F("✅ 呼吸燈測試: ")); Serial1.print(colorName);
-        Serial1.print(F(" speed=")); Serial1.print(speed);
-        Serial1.print(F(" x")); Serial1.println(cycles);
-        for (int i = 0; i < cycles; i++) {
-          breathLED(pin, speed);
-        }
-        setLEDOff();
-      }
-    }
-  } else if (cmd.startsWith("LED BRIGHT ")) {
-    // 格式: LED BRIGHT <RED|GREEN|BLUE> <0-255>
-    String args = cmd.substring(11);
-    args.trim();
-    int sp1 = args.indexOf(' ');
-    if (sp1 < 0) {
-      Serial1.println(F("❌ 格式錯誤，用法: LED BRIGHT <RED/GREEN/BLUE> <0-255>"));
-    } else {
-      String colorName = args.substring(0, sp1);
-      int brightness = constrain(args.substring(sp1 + 1).toInt(), 0, 255);
-      int logicalColor = ledPinByName(colorName);
-      if (logicalColor < 0) {
-        Serial1.println(F("❌ 顏色錯誤，用: RED/GREEN/BLUE"));
-      } else {
-        ledManualOverride = true;
-        manualBreathColorIndex = -1;  // 清走手動呼吸選色，避免覆蓋固定亮度
-        // 測試單一顏色亮度前，先關晒另外兩隻，避免混色
-        setLEDOff();
-        int physPin = ledPhysicalPin(logicalColor);
-        analogWrite(physPin, 255 - brightness);  // active-low: 反轉 duty cycle
-        Serial1.print(F("✅ ")); Serial1.print(colorName);
-        Serial1.print(F(" 亮度 = ")); Serial1.println(brightness);
-      }
-    }
   }
   else if (cmd.startsWith("WALK ")) {
     String params = cmd.substring(5);
@@ -1850,17 +1648,11 @@ void showHelp() {
   Serial1.println(F("IMU CAL (GC)    : 重新校正陀螺零偏 (機身須靜止)"));
   Serial1.println(F("HOME (HM)       : 所有伺服機回到初始位置"));
   Serial1.println(F("FREE ALL (F)    : 所有伺服機脫力 (關閉扭力)"));
-  Serial1.println(F("\n=== LED 測試指令 ==="));
-  Serial1.println(F("LED RED/GREEN/BLUE/YELLOW/CYAN/PURPLE/WHITE/OFF : 切換LED顏色 (7色+關)"));
-  Serial1.println(F("LED AUTO   : 恢復自動模式（電壓狀態顯示，藍=正常/紅=低電壓）"));
-  Serial1.println(F("LED BREATH <色> <速度ms> [次數] : 測試呼吸燈速度 (例: LED BREATH RED 4 3)"));
-  Serial1.println(F("LED BRIGHT <色> <0-255>        : 測試固定亮度 (例: LED BRIGHT BLUE 128)"));
   Serial1.println(F("\n=== 步行與動作指令 ==="));
   Serial1.println(F("WALK F/B/L/R  : 開始向前/後/左轉/右轉行走，直到收到 STOP"));
   Serial1.println(F("STOP (ST)     : 立即安全停止當前動作並回到 Home Point"));
-  Serial1.println(F("\n=== 單軸/多軸微調 (ASCII) ==="));
+  Serial1.println(F("\n=== 單軸微調 (ASCII) ==="));
   Serial1.println(F("S [群組] [ID] [角度] [速度] : 設定單一伺服 (例: S HV 1 8000 64)"));
-  Serial1.println(F("S MULTI [速度] [數量] [群組ID 角度 ...] : 多軸同步"));
   Serial1.println(F("? [群組] [ID] : 查詢伺服當前位置"));
   Serial1.println(F("\n=== table_walk 步態參數調整 ==="));
   Serial1.println(F("WALKSET             : 顯示目前 LEN/ROLL/PITCH 數值"));
