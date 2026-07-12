@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>プリメイドAI 控制器 - 官方ICS Binary協議</title>
+    <title>プリメイドAI 控制器 - PMA 0x18/0x19 官方協議</title>
     <style>
         * {
             box-sizing: border-box;
@@ -467,7 +467,7 @@
 </head>
 <body>
 <div class="container">
-    <h1>🤖 プリメイドAI 控制器 <small>官方ICS Binary協議 | 左右鍵扭力 | 可手動輸入指令</small></h1>
+    <h1>🤖 プリメイドAI 控制器 <small>PMA 0x18/0x19 官方協議 | 左右鍵扭力 | 可手動輸入指令</small></h1>
 
     <div class="top-control-bar">
         <button class="btn" id="connectBtn">🔌 連接</button>
@@ -539,7 +539,7 @@
                     <button class="copy-btn" id="clearLogBtn">清除</button>
                 </div>
             </div>
-            <div class="log-content" id="logContent">[系統] 控制器啟動 - 官方ICS Binary協議</div>
+            <div class="log-content" id="logContent">[系統] 控制器啟動 - PMA 0x18/0x19 官方協議</div>
         </div>
     </div>
 </div>
@@ -548,34 +548,42 @@
     (function() {
         // ========== 伺服定義 (HV:1-14, MV:21-31) ==========
         const SERVOS = [
-            { id:21, nameZh:'頭部俯仰', min:7200, max:8400, home:7500, group:'MV', part:'head', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64 },
-            { id:22, nameZh:'頭部左右', min:5000, max:10000, home:7500, group:'MV', part:'head', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64 },
-            { id:23, nameZh:'頭部側傾', min:6900, max:8100, home:7500, group:'MV', part:'head', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64 },
-            { id:1, nameZh:'右肩 pitch', min:4300, max:11500, home:10200, group:'HV', part:'rhand', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64 },
-            { id:24, nameZh:'右肩 roll',  min:7450, max:10350, home:9800, group:'MV', part:'rhand', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64 },
-            { id:26, nameZh:'右上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64 },
-            { id:28, nameZh:'右肘 pitch', min:7100, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64 },
-            { id:30, nameZh:'右手腕 yaw', min:3500, max:11500, home:5000, group:'MV', part:'rhand', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64 },
-            { id:2, nameZh:'左肩 pitch', min:3500, max:10700, home:4700, group:'HV', part:'lhand', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64 },
-            { id:25, nameZh:'左肩 roll',  min:4550, max:7550, home:5200, group:'MV', part:'lhand', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64 },
-            { id:27, nameZh:'左上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64 },
-            { id:29, nameZh:'左肘 pitch', min:4000, max:7900, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64 },
-            { id:31, nameZh:'左手腕 yaw', min:3500, max:11500, home:10000, group:'MV', part:'lhand', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64 },
-            { id:3, nameZh:'右髖 yaw',   min:6530, max:9030, home:7780, group:'HV', part:'rleg', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64 },
-            { id:5, nameZh:'右髖 roll',  min:6700, max:8300, home:7400, group:'HV', part:'rleg', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64 },
-            { id:7, nameZh:'右大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64 },
-            { id:9, nameZh:'右膝 pitch', min:3950, max:7600, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64 },
-            { id:11, nameZh:'右踝 pitch', min:5700, max:8300, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64 },
-            { id:13, nameZh:'右踝 roll',  min:6800, max:9150, home:7825, group:'HV', part:'rleg', shortKey:{ dec:'[', inc:']' }, speed:30, stretch:64 },
-            { id:4, nameZh:'左髖 yaw',   min:6250, max:8750, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64 },
-            { id:6, nameZh:'左髖 roll',  min:6700, max:8300, home:7600, group:'HV', part:'lleg', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64 },
-            { id:8, nameZh:'左大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64 },
-            { id:10, nameZh:'左膝 pitch', min:7400, max:11050, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64 },
-            { id:12, nameZh:'左踝 pitch', min:6750, max:9350, home:7550, group:'HV', part:'lleg', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64 },
-            { id:14, nameZh:'左踝 roll',  min:6200, max:8450, home:7450, group:'HV', part:'lleg', shortKey:{ dec:'\'', inc:'\\' }, speed:30, stretch:64 }
+            { id:21, nameZh:'頭部俯仰', min:7200, max:8400, home:7500, group:'MV', part:'head', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:22, nameZh:'頭部左右', min:5000, max:10000, home:7500, group:'MV', part:'head', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:23, nameZh:'頭部側傾', min:6900, max:8100, home:7500, group:'MV', part:'head', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:1, nameZh:'右肩 pitch', min:4300, max:11500, home:10200, group:'HV', part:'rhand', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:24, nameZh:'右肩 roll',  min:7450, max:10350, home:9500, group:'MV', part:'rhand', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:9500 },
+            { id:26, nameZh:'右上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:28, nameZh:'右肘 pitch', min:7100, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:30, nameZh:'右手腕 yaw', min:3500, max:11500, home:5000, group:'MV', part:'rhand', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:2, nameZh:'左肩 pitch', min:3500, max:10700, home:4700, group:'HV', part:'lhand', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:25, nameZh:'左肩 roll',  min:4550, max:7550, home:5500, group:'MV', part:'lhand', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64, baselineCenter:5500 },
+            { id:27, nameZh:'左上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:29, nameZh:'左肘 pitch', min:4000, max:7900, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:31, nameZh:'左手腕 yaw', min:3500, max:11500, home:10000, group:'MV', part:'lhand', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:3, nameZh:'右髖 yaw',   min:6530, max:9030, home:7780, group:'HV', part:'rleg', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:5, nameZh:'右髖 roll',  min:6700, max:8300, home:7400, group:'HV', part:'rleg', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:7, nameZh:'右大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:9, nameZh:'右膝 pitch', min:3950, max:7600, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:11, nameZh:'右踝 pitch', min:5700, max:8300, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:13, nameZh:'右踝 roll',  min:6800, max:9150, home:7825, group:'HV', part:'rleg', shortKey:{ dec:'[', inc:']' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:4, nameZh:'左髖 yaw',   min:6250, max:8750, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:6, nameZh:'左髖 roll',  min:6700, max:8300, home:7600, group:'HV', part:'lleg', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:8, nameZh:'左大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:10, nameZh:'左膝 pitch', min:7400, max:11050, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:12, nameZh:'左踝 pitch', min:6750, max:9350, home:7550, group:'HV', part:'lleg', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:14, nameZh:'左踝 roll',  min:6200, max:8450, home:7450, group:'HV', part:'lleg', shortKey:{ dec:'\'', inc:'\\' }, speed:30, stretch:64, baselineCenter:7500 }
         ];
 
         // ========== 全域變數 ==========
+        // 0x18 封包嘅共用 SPD tick 值（1 tick = 15ms，.ino 內部定義）。
+        // 呢個值控制成個 0x18 封包入面所有 servo 移動去目標角度嘅耗時，
+        // 同 servoList 個別 speed 屬性（經 0x19 設定）係兩個獨立概念：
+        // 0x19 speed 係伺服硬件本身嘅轉動速度上限，0x18 SPD tick 係
+        //「呢次移動預期用幾耐內插完成」。
+        const DEFAULT_SPD_TICKS = 10;
+
+
         let currentPart = 'head';
         let port = null, reader = null;
         let currentAngles = {};
@@ -618,7 +626,68 @@
         
         function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-        // ========== 發送 Binary 指令 (帶 Hex 顯示) ==========
+        // ========== binaryID → pma-style servo ID 轉換 ==========
+        // 呢個 controller 用嘅係 servoList 嘅 binaryID（HV: 1~14, MV: 21~31），
+        // 但 0x18/0x19 封包用嘅係 .ino/findServoByPmaId() 嗰套 pma-style ID：
+        //   HV: pmaId = binaryID * 2          (1->2, 2->4 ... 14->28)
+        //   MV: pmaId = (binaryID - 20)*2 + 1  (21->3, 22->5 ... 31->23)
+        // 對照 .ino: binaryID = 20 + (pmaId-1)/2  =>  pmaId = (binaryID-20)*2 + 1
+        function binaryIdToPmaId(group, binaryId) {
+            if (group === 'HV') return binaryId * 2;
+            return (binaryId - 20) * 2 + 1;
+        }
+
+        // ========== 0x18/0x19 封包 checksum 同組包 ==========
+        // 封包格式: [LEN] [CMD] ...payload... [checksum]
+        // LEN = 總長度（含自己同 checksum），checksum = LEN ^ CMD ^ 全部 payload byte
+        function buildPmaPacket(cmd, payload) {
+            const len = payload.length + 3; // LEN + CMD + payload + checksum
+            let checksum = len ^ cmd;
+            for (const b of payload) checksum ^= b;
+            return [len, cmd, ...payload, checksum];
+        }
+
+        // 0x18: [00(保留), SPD, {pmaID, LO, HI} x N]
+        // angle==0 係官方「脫力」特殊值（唔係正常角度 0），唔經轉換直送。
+        //
+        // 重要：.ino 嘅 pmaApplyServoAngle() 收到 rawAngle 之後，會再做
+        //   target = servo.homePosition + (rawAngle - servo.baselineCenter)
+        // 即係 MCU 自己已經做咗一次「baselineCenter -> homePosition」嘅轉換。
+        // 如果呢度直接送 UI 顯示嘅實際角度（即 servo.home，例如 HV1=10200），
+        // MCU 會再疊多一次 offset，變成 homePosition 兩次疊加，令目標角度
+        // 離譜甚至爆 min/max（HV1/HV2 呢類 homePosition 遠離 7500 嘅 servo
+        // 影響最明顯）。所以呢度要做返轉換：
+        //   rawAngleToSend = displayAngle - servo.homePosition + servo.baselineCenter
+        // 咁樣 MCU 嗰邊做完佢自己嘅轉換之後，先啱啱好等於 displayAngle。
+        function buildCmd18(spdTicks, servoAngles) {
+            const payload = [0x00, spdTicks & 0xFF];
+            for (const { group, id, angle } of servoAngles) {
+                const pmaId = binaryIdToPmaId(group, id);
+                let rawAngle;
+                if (angle === 0) {
+                    rawAngle = 0; // 脫力特殊值，唔做轉換
+                } else {
+                    const servo = SERVOS.find(s => s.group === group && s.id === id);
+                    const baseline = servo ? servo.baselineCenter : 7500;
+                    const home = servo ? servo.home : 7500;
+                    rawAngle = angle - home + baseline;
+                }
+                payload.push(pmaId, rawAngle & 0xFF, (rawAngle >> 8) & 0xFF);
+            }
+            return buildPmaPacket(0x18, payload);
+        }
+
+        // 0x19: [subType(00=SPEED|10=STRETCH), {pmaID, value} x N]
+        function buildCmd19(subType, servoValues) {
+            const payload = [subType];
+            for (const { group, id, value } of servoValues) {
+                const pmaId = binaryIdToPmaId(group, id);
+                payload.push(pmaId, value & 0xFF);
+            }
+            return buildPmaPacket(0x19, payload);
+        }
+
+
         async function sendBinary(packet) {
             if(!port) { addLog('❌ 未連接','error'); return false; }
             try {
@@ -648,36 +717,36 @@
             }
         }
 
-        // ========== 官方 ICS Binary 功能 ==========
-        async function sendSpeed(id, speed) {
-            const packet = [0xC0 | id, 0x02, speed];
+        // ========== 0x18/0x19 官方協議功能 ==========
+        // 注意：呢度嘅 group/id 係 servoList 嘅 binaryID（例如 HV id=1, MV id=21），
+        // buildCmd18/buildCmd19 內部會自動轉做 pma-style servo ID。
+        async function sendSpeed(group, id, speed) {
+            const packet = buildCmd19(0x00, [{ group, id, value: speed }]);
             return sendBinary(packet);
         }
-        
-        async function sendPosition(id, angle) {
-            const high = (angle >> 7) & 0x7F;
-            const low = angle & 0x7F;
-            const packet = [0x80 | id, high, low];
+
+        async function sendPosition(group, id, angle) {
+            const packet = buildCmd18(DEFAULT_SPD_TICKS, [{ group, id, angle }]);
             return sendBinary(packet);
         }
-        
-        async function sendStretch(id, stretch) {
-            if(stretch < 1) stretch = 1;
-            if(stretch > 127) stretch = 127;
-            const packet = [0xC0 | id, 0x01, stretch];
+
+        async function sendStretch(group, id, stretch) {
+            if (stretch < 1) stretch = 1;
+            if (stretch > 127) stretch = 127;
+            const packet = buildCmd19(0x10, [{ group, id, value: stretch }]);
             return sendBinary(packet);
         }
-        
-        // 官方脫力指令: [0x80+ID, 0x00, 0x00]
-        async function sendFree(id) {
-            const packet = [0x80 | id, 0x00, 0x00];
+
+        // 0x18 官方脫力語意：angle==0 = 脫力（唔係正常角度值 0）
+        async function sendFree(group, id) {
+            const packet = buildCmd18(DEFAULT_SPD_TICKS, [{ group, id, angle: 0 }]);
             return sendBinary(packet);
         }
-        
+
         async function sendCommand(group, id, angle, speed) {
-            await sendSpeed(id, speed);
+            await sendSpeed(group, id, speed);
             await delay(5);
-            await sendPosition(id, angle);
+            await sendPosition(group, id, angle);
             return true;
         }
 
@@ -844,7 +913,7 @@
                     inp.value = sp;
                     const s = SERVOS.find(s => s.group === g && s.id === id);
                     if (s) s.speed = sp;
-                    sendSpeed(id, sp);
+                    sendSpeed(g, id, sp);
                 });
             });
             
@@ -857,7 +926,7 @@
                     if (st > 127) st = 127;
                     inp.value = st;
                     currentStretch[`${g}_${id}`] = st;
-                    sendStretch(id, st);
+                    sendStretch(g, id, st);
                 });
             });
         }
@@ -911,7 +980,7 @@
             s.speed = ns;
             const inp = document.getElementById(`speed_${group}_${id}`);
             if (inp) inp.value = ns;
-            sendSpeed(id, ns);
+            sendSpeed(group, id, ns);
             if (selectedServo && selectedServo.group === group && selectedServo.id === id) {
                 highlightSelected();
             }
@@ -926,7 +995,7 @@
             currentStretch[`${group}_${id}`] = ns;
             const inp = document.getElementById(`stretch_${group}_${id}`);
             if (inp) inp.value = ns;
-            sendStretch(id, ns);
+            sendStretch(group, id, ns);
             if (selectedServo && selectedServo.group === group && selectedServo.id === id) {
                 highlightSelected();
             }
@@ -941,12 +1010,12 @@
                 currentAngles[`${s.group}_${s.id}`] = s.home;
             }
             for (let s of servoList) {
-                await sendSpeed(s.id, 30);
+                await sendSpeed(s.group, s.id, 30);
                 await delay(2);
             }
             await delay(10);
             for (let s of servoList) {
-                await sendPosition(s.id, s.home);
+                await sendPosition(s.group, s.id, s.home);
                 await delay(2);
             }
             addLog(`🏠 ${name} HOME 完成 (${servoList.length}軸)`, 'received');
@@ -962,7 +1031,7 @@
             if (!port) { alert('請先連接'); return; }
             addLog(`💤 正在脫力 ${partName}...`, 'info');
             for (let s of servoList) {
-                await sendFree(s.id);
+                await sendFree(s.group, s.id);
                 await delay(15);
             }
             addLog(`✅ ${partName} 脫力完成`, 'received');
@@ -972,7 +1041,7 @@
             if (!port) { alert('請先連接'); return; }
             addLog(`💤 正在脫力全部伺服...`, 'info');
             for (let s of SERVOS) {
-                await sendFree(s.id);
+                await sendFree(s.group, s.id);
                 await delay(10);
             }
             addLog(`✅ 全部伺服脫力完成`, 'received');
@@ -1049,7 +1118,7 @@
                     else if (activeAdjustType === 'speed') window.adjustSpeed(activeServo.group, activeServo.id, activeDelta);
                     else if (activeAdjustType === 'stretch') window.adjustStretch(activeServo.group, activeServo.id, activeDelta);
                 }
-            }, 150);
+            }, 200); // 每秒5次 (1000ms / 5 = 200ms)
         }
         
         function stopRepeat() {
@@ -1117,7 +1186,7 @@
                 document.getElementById('status').innerHTML = '✅ 已連接';
                 document.getElementById('connectBtn').disabled = true;
                 document.getElementById('disconnectBtn').disabled = false;
-                addLog('✅ 串口已連接 - 官方ICS Binary協議', 'received');
+                addLog('✅ 串口已連接 - PMA 0x18/0x19 官方協議', 'received');
                 readLoop();
             } catch (e) { addLog(`❌ 連接失敗: ${e.message}`, 'error'); }
         }
