@@ -1149,56 +1149,6 @@ bool processASCIICommand(String cmd) {
 
   if (cmd.startsWith("FREE ")) return processFreeCommand(cmd);
 
-  if (cmd.startsWith("S ")) {
-    int firstSpace = cmd.indexOf(' ');
-    int secondSpace = cmd.indexOf(' ', firstSpace + 1);
-    int thirdSpace = cmd.indexOf(' ', secondSpace + 1);
-    int fourthSpace = cmd.indexOf(' ', thirdSpace + 1);
-
-    if (firstSpace > 0 && secondSpace > 0 && thirdSpace > 0) {
-      String group = cmd.substring(firstSpace + 1, secondSpace);
-      int binaryId = cmd.substring(secondSpace + 1, thirdSpace).toInt();
-      int angle = cmd.substring(thirdSpace + 1, (fourthSpace > 0 ? fourthSpace : cmd.length())).toInt();
-
-      group.toUpperCase();
-
-      ServoInfo *servo = findServoByBinaryID(binaryId);
-
-      if (servo != NULL) {
-        bool groupMatch = (group == "MV" && !servo->isHV) || (group == "HV" && servo->isHV);
-
-        if (groupMatch) {
-          if (angle >= servo->minAngle && angle <= servo->maxAngle) {
-
-            if (fourthSpace > 0) {
-              int speed = cmd.substring(fourthSpace + 1).toInt();
-              if (speed < 1) speed = 1;      // IcsBaseClass::MIN_1 = 1，唔係 0
-              if (speed > 127) speed = 127;
-
-              safeSetSpd(servo, speed);
-              servo->currentSpeed = speed;
-            }
-
-            safeSetPos(servo, angle);
-            servo->currentTunePos = angle;
-
-            setLEDGreen();
-            delay(20);
-            setLEDBlue();
-          } else {
-            Serial1.print(F("角度超出範圍: "));
-            Serial1.print(servo->minAngle);
-            Serial1.print(F("-"));
-            Serial1.println(servo->maxAngle);
-          }
-          return true;
-        }
-      }
-      Serial1.println(F("找不到對應的伺服"));
-    }
-    return true;
-  }
-
   if (cmd.startsWith("? ")) {
     int firstSpace = cmd.indexOf(' ');
     int secondSpace = cmd.indexOf(' ', firstSpace + 1);
@@ -1651,8 +1601,7 @@ void showHelp() {
   Serial1.println(F("\n=== 步行與動作指令 ==="));
   Serial1.println(F("WALK F/B/L/R  : 開始向前/後/左轉/右轉行走，直到收到 STOP"));
   Serial1.println(F("STOP (ST)     : 立即安全停止當前動作並回到 Home Point"));
-  Serial1.println(F("\n=== 單軸微調 (ASCII) ==="));
-  Serial1.println(F("S [群組] [ID] [角度] [速度] : 設定單一伺服 (例: S HV 1 8000 64)"));
+  Serial1.println(F("\n=== 伺服查詢 (ASCII) ==="));
   Serial1.println(F("? [群組] [ID] : 查詢伺服當前位置"));
   Serial1.println(F("\n=== table_walk 步態參數調整 ==="));
   Serial1.println(F("WALKSET             : 顯示目前 LEN/ROLL/PITCH 數值"));
