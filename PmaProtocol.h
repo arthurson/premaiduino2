@@ -124,8 +124,8 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
 // =========================================================
 // ===== STM32 內部 Flash 底層讀寫（motion storage 專用） =====
 // =========================================================
-// STM32F103C8/CB (128KB Flash)，page size = 1024 bytes（low/medium
-// density devices）。喺 Flash 尾部劃一個 60KB 嘅 motion storage 區
+// STM32F102CBT6 (128KB Flash)，page size = 1024 bytes（medium-density
+// devices）。喺 Flash 尾部劃一個 60KB 嘅 motion storage 區
 // （跟原裝 60-page 上限），用固定地址（Flash 尾 60KB），因為標準
 // STM32duino linker script 冇提供 "code end" 符號畀我哋自動計。
 // 只要 firmware .bin 大細冇超過 68KB（128KB - 60KB），呢個劃法
