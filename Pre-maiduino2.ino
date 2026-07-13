@@ -1,5 +1,3 @@
-
-
 #include <Arduino.h>
 #include <math.h>  
 #include <stm32f1xx_hal_flash.h>
@@ -18,6 +16,12 @@ struct MotionIdEntry {
   uint8_t startPage;
   uint16_t totalLen;
 };
+
+// 同上，setupServoParam() 用嘅 function pointer 型別要喺呢度定義，
+// 否則 Arduino IDE 自動生成嘅 forward declaration（會擺喺呢個位置）
+// 會用到仲未定義嘅 ServoSetFn，導致 "has not been declared" 編譯錯誤。
+struct ServoInfo;
+typedef bool (*ServoSetFn)(ServoInfo *, uint8_t);
 
 HardwareSerial Serial2(PA2);
 HardwareSerial Serial3(PB10);
@@ -96,7 +100,7 @@ ServoInfo servoList[] = {
   // ===== MV群 (上半身) - binaryID 21-31 =====
   { 21, 1, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部前後", 7200, 8400, false, true, 7500 },
   { 22, 2, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部轉向", 5000, 10000, false, true, 7500 },
-  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, false, 7500 },  // 未駁線
+  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, true, 7500 },  // 未駁線
   { 24, 4, 9500, 9500, DEFAULT_SPEED_MV, &icsMV, "右肩側擺", 7450, 10350, false, true, 9500 },  // 官方中立值非7500
   { 25, 5, 5500, 5500, DEFAULT_SPEED_MV, &icsMV, "左肩側擺", 4550, 7550, false, true, 5500 },   // 官方中立值非7500
   { 26, 6, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右臂轉向", 4000, 11000, false, true, 7500 },
@@ -148,15 +152,9 @@ bool safeSetCur(ServoInfo *servo, uint8_t curlim);
 bool safeSetTmp(ServoInfo *servo, uint8_t tmplim);
 uint16_t applyHomeOffset(ServoInfo *servo, int rawAngle, int baselineCenter);
 
-int setStrc(byte id, unsigned int strc);
-int setSpd(byte id, unsigned int spd);
-int setCur(byte id, unsigned int curlim);
-int setTmp(byte id, unsigned int tmplim);
-
-int getStrc(byte id);
-int getSpd(byte id);
-int getCur(byte id);
-int getTmp(byte id);
+// 查詢用讀取（? 指令用），set 一律經 safeSetXxx() 唔經呢度
+enum ServoParamField { PARAM_STRC, PARAM_SPD, PARAM_CUR, PARAM_TMP };
+int getServoParam(byte id, ServoParamField field);
 
 // ===== .pma / ICS binary 封包接收 =====
 void pmaReceiveUpdate();
@@ -1027,52 +1025,19 @@ bool safeSetTmp(ServoInfo *servo, uint8_t tmplim) {
   return (result != ICS_FALSE);
 }
 
-int setStrc(byte id, unsigned int strc) {
+// 合併原本 getStrc/getSpd/getCur/getTmp 4份幾乎一樣嘅樣板；
+// 原本嘅 setStrc/setSpd/setCur/setTmp 4個 wrapper 完全冇被 call 過
+// （實際 set 一律經 safeSetXxx()），已一併移除。
+int getServoParam(byte id, ServoParamField field) {
   ServoInfo *servo = findServoByBinaryID(id);
   if (!servo) return ICS_FALSE;
-  return servo->icsPort->setStrc(servo->servoID, strc);
-}
-
-int setSpd(byte id, unsigned int spd) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->setSpd(servo->servoID, spd);
-}
-
-int setCur(byte id, unsigned int curlim) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->setCur(servo->servoID, curlim);
-}
-
-int setTmp(byte id, unsigned int tmplim) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->setTmp(servo->servoID, tmplim);
-}
-
-int getStrc(byte id) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->getStrc(servo->servoID);
-}
-
-int getSpd(byte id) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->getSpd(servo->servoID);
-}
-
-int getCur(byte id) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->getCur(servo->servoID);
-}
-
-int getTmp(byte id) {
-  ServoInfo *servo = findServoByBinaryID(id);
-  if (!servo) return ICS_FALSE;
-  return servo->icsPort->getTmp(servo->servoID);
+  switch (field) {
+    case PARAM_STRC: return servo->icsPort->getStrc(servo->servoID);
+    case PARAM_SPD:  return servo->icsPort->getSpd(servo->servoID);
+    case PARAM_CUR:  return servo->icsPort->getCur(servo->servoID);
+    case PARAM_TMP:  return servo->icsPort->getTmp(servo->servoID);
+  }
+  return ICS_FALSE;
 }
 
 // ===== 移動到 Home Point =====
@@ -1178,10 +1143,10 @@ bool processASCIICommand(String cmd) {
           if (field == "STRC" || field == "SPD" || field == "CUR" || field == "TMP") {
             int result = ICS_FALSE;
             const char *label = "";
-            if (field == "STRC") { result = getStrc(binaryId); label = "Stretch"; }
-            else if (field == "SPD")  { result = getSpd(binaryId);  label = "Speed"; }
-            else if (field == "CUR")  { result = getCur(binaryId);  label = "電流上限"; }
-            else if (field == "TMP")  { result = getTmp(binaryId);  label = "溫度上限"; }
+            if (field == "STRC") { result = getServoParam(binaryId, PARAM_STRC); label = "Stretch"; }
+            else if (field == "SPD")  { result = getServoParam(binaryId, PARAM_SPD);  label = "Speed"; }
+            else if (field == "CUR")  { result = getServoParam(binaryId, PARAM_CUR);  label = "電流上限"; }
+            else if (field == "TMP")  { result = getServoParam(binaryId, PARAM_TMP);  label = "溫度上限"; }
 
             if (result != ICS_FALSE) {
               Serial1.print(group);
@@ -1218,6 +1183,32 @@ bool processASCIICommand(String cmd) {
   return false;
 }
 
+// ===== setup() 用：批次設定全部伺服某一項參數，並印出統一格式嘅 log =====
+// 取代原本 SPD/STRC/CUR/TMP 4段幾乎一樣嘅 print+for迴圈；showFailures=true
+// 時（CUR/TMP 原本行為）會逐個列印失敗嘅伺服名，SPD/STRC 原本冇呢個提示。
+static void setupServoParam(const char *label, uint16_t hvVal, uint16_t mvVal,
+                             ServoSetFn setFn, bool showFailures) {
+  Serial1.print(F("設定伺服"));
+  Serial1.print(label);
+  Serial1.print(F(" (HV="));
+  Serial1.print(hvVal);
+  Serial1.print(F(", MV="));
+  Serial1.print(mvVal);
+  Serial1.print(F(")..."));
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    uint16_t val = servoList[i].isHV ? hvVal : mvVal;
+    bool ok = setFn(&servoList[i], (uint8_t)val);
+    if (showFailures && !ok) {
+      Serial1.print(F(" [失敗:")); Serial1.print(servoList[i].name); Serial1.print(F("]"));
+    }
+  }
+  if (showFailures) {
+    Serial1.println(F(" 完成"));
+  } else {
+    Serial1.println(F("完成"));
+  }
+}
+
 // ===== setup() =====
 void setup() {
   initLED();
@@ -1243,53 +1234,10 @@ void setup() {
   initServos();
   Serial1.println(F("完成"));
 
-  Serial1.print(F("設定伺服速度 (HV="));
-  Serial1.print(DEFAULT_SPEED_HV);
-  Serial1.print(F(", MV="));
-  Serial1.print(DEFAULT_SPEED_MV);
-  Serial1.print(F(")..."));
-  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-    int spdVal = servoList[i].isHV ? DEFAULT_SPEED_HV : DEFAULT_SPEED_MV;
-    safeSetSpd(&servoList[i], spdVal);
-  }
-  Serial1.println(F("完成"));
-
-  Serial1.print(F("設定伺服 Stretch (HV="));
-  Serial1.print(DEFAULT_STRETCH_HV);
-  Serial1.print(F(", MV="));
-  Serial1.print(DEFAULT_STRETCH_MV);
-  Serial1.print(F(")..."));
-  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-    int strcVal = servoList[i].isHV ? DEFAULT_STRETCH_HV : DEFAULT_STRETCH_MV;
-    safeSetStrc(&servoList[i], strcVal);
-  }
-  Serial1.println(F("完成"));
-
-  Serial1.print(F("設定伺服電流上限 (HV="));
-  Serial1.print(DEFAULT_CUR_HV);
-  Serial1.print(F(", MV="));
-  Serial1.print(DEFAULT_CUR_MV);
-  Serial1.print(F(")..."));
-  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-    int curVal = servoList[i].isHV ? DEFAULT_CUR_HV : DEFAULT_CUR_MV;
-    if (!safeSetCur(&servoList[i], curVal)) {
-      Serial1.print(F(" [失敗:")); Serial1.print(servoList[i].name); Serial1.print(F("]"));
-    }
-  }
-  Serial1.println(F(" 完成"));
-
-  Serial1.print(F("設定伺服溫度上限 (HV="));
-  Serial1.print(DEFAULT_TMP_HV);
-  Serial1.print(F(", MV="));
-  Serial1.print(DEFAULT_TMP_MV);
-  Serial1.print(F(")..."));
-  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-    int tmpVal = servoList[i].isHV ? DEFAULT_TMP_HV : DEFAULT_TMP_MV;
-    if (!safeSetTmp(&servoList[i], tmpVal)) {
-      Serial1.print(F(" [失敗:")); Serial1.print(servoList[i].name); Serial1.print(F("]"));
-    }
-  }
-  Serial1.println(F(" 完成"));
+  setupServoParam("速度", DEFAULT_SPEED_HV, DEFAULT_SPEED_MV, safeSetSpd, false);
+  setupServoParam("Stretch", DEFAULT_STRETCH_HV, DEFAULT_STRETCH_MV, safeSetStrc, false);
+  setupServoParam("電流上限", DEFAULT_CUR_HV, DEFAULT_CUR_MV, safeSetCur, true);
+  setupServoParam("溫度上限", DEFAULT_TMP_HV, DEFAULT_TMP_MV, safeSetTmp, true);
 
   Serial1.println(F("\n🏠 發送 home 指令（servo 移動中）..."));
   moveAllServosToHome();
@@ -1370,6 +1318,36 @@ void loop() {
     lastImuUpdateMs = nowImuTick;
     imuUpdate();
   }
+}
+
+// ===== WALKSET STRC/SPD/CUR/TMP 共用邏輯 =====
+// 4個參數嘅 range/label/對應 set function 唔同，其餘 parsing 同套用
+// 邏輯完全一致，統一喺呢度處理，processCommand() 淨係負責讀指令、
+// 格式檢查交呢個 function。
+static void walkSetServoParam(const String &paramName, const String &group, int rawVal) {
+  bool wantHV = (group == "HV");
+  int value;
+  const char *label;
+  ServoSetFn setFn;
+
+  if (paramName == "STRC") {
+    value = constrain(rawVal, 1, 127); label = "Stretch"; setFn = safeSetStrc;
+  } else if (paramName == "SPD") {
+    value = constrain(rawVal, 1, 127); label = "Speed"; setFn = safeSetSpd;
+  } else if (paramName == "CUR") {
+    value = constrain(rawVal, 1, 63);  label = "電流上限"; setFn = safeSetCur;
+  } else {  // "TMP"
+    value = constrain(rawVal, 1, 127); label = "溫度上限"; setFn = safeSetTmp;
+  }
+
+  for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
+    if (servoList[i].isHV == wantHV) {
+      setFn(&servoList[i], (uint8_t)value);
+    }
+  }
+  Serial1.print(F("✅ ")); Serial1.print(group);
+  Serial1.print(F(" 伺服 ")); Serial1.print(label);
+  Serial1.print(F(" = ")); Serial1.println(value);
 }
 
 // ===== 命令處理 =====
@@ -1471,105 +1449,29 @@ void processCommand(String cmd) {
         Serial1.print(F("✅ DuraPitch = ")); Serial1.println(tableWalkParams.dura_pitch);
       } else if (paramName == "TICKMS") {
         Serial1.println(F("❌ TICKMS 需要重新編譯（#define TABLE_WALK_TICK_MS），暫不支援即時調整"));
-      } else if (paramName == "STRC") {
-        // 格式: WALKSET STRC <HV|MV> <值>
-        String strcArgs = params.substring(spacePos + 1);
-        strcArgs.trim();
-        int strcSpacePos = strcArgs.indexOf(' ');
-        if (strcSpacePos > 0) {
-          String strcGroup = strcArgs.substring(0, strcSpacePos);
-          strcGroup.toUpperCase();
-          int strc = constrain(strcArgs.substring(strcSpacePos + 1).toInt(), 1, 127);
-
-          if (strcGroup == "HV" || strcGroup == "MV") {
-            bool wantHV = (strcGroup == "HV");
-            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-              if (servoList[i].isHV == wantHV) {
-                safeSetStrc(&servoList[i], strc);
-              }
-            }
-            Serial1.print(F("✅ ")); Serial1.print(strcGroup);
-            Serial1.print(F(" 伺服 Stretch = ")); Serial1.println(strc);
+      } else if (paramName == "STRC" || paramName == "SPD" ||
+                 paramName == "CUR" || paramName == "TMP") {
+        // 格式: WALKSET <STRC|SPD|CUR|TMP> <HV|MV> <值>
+        // 4個參數 parsing+套用邏輯完全一致，只係 label/上限/set function 唔同，
+        // 統一交俾 walkSetServoParam() 處理。
+        String args = params.substring(spacePos + 1);
+        args.trim();
+        int argSpacePos = args.indexOf(' ');
+        if (argSpacePos > 0) {
+          String group = args.substring(0, argSpacePos);
+          group.toUpperCase();
+          if (group == "HV" || group == "MV") {
+            int rawVal = args.substring(argSpacePos + 1).toInt();
+            walkSetServoParam(paramName, group, rawVal);
           } else {
-            Serial1.println(F("❌ 格式錯誤，用法: WALKSET STRC HV <值> 或 WALKSET STRC MV <值>"));
+            Serial1.print(F("❌ 格式錯誤，用法: WALKSET ")); Serial1.print(paramName);
+            Serial1.print(F(" HV <值> 或 WALKSET ")); Serial1.print(paramName);
+            Serial1.println(F(" MV <值>"));
           }
         } else {
-          Serial1.println(F("❌ 格式錯誤，用法: WALKSET STRC HV <值> 或 WALKSET STRC MV <值>"));
-        }
-      } else if (paramName == "SPD") {
-        // 格式: WALKSET SPD <HV|MV> <值>
-        String spdArgs = params.substring(spacePos + 1);
-        spdArgs.trim();
-        int spdSpacePos = spdArgs.indexOf(' ');
-        if (spdSpacePos > 0) {
-          String spdGroup = spdArgs.substring(0, spdSpacePos);
-          spdGroup.toUpperCase();
-          int spd = constrain(spdArgs.substring(spdSpacePos + 1).toInt(), 1, 127);
-
-          if (spdGroup == "HV" || spdGroup == "MV") {
-            bool wantHV = (spdGroup == "HV");
-            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-              if (servoList[i].isHV == wantHV) {
-                safeSetSpd(&servoList[i], spd);
-              }
-            }
-            Serial1.print(F("✅ ")); Serial1.print(spdGroup);
-            Serial1.print(F(" 伺服 Speed = ")); Serial1.println(spd);
-          } else {
-            Serial1.println(F("❌ 格式錯誤，用法: WALKSET SPD HV <值> 或 WALKSET SPD MV <值>"));
-          }
-        } else {
-          Serial1.println(F("❌ 格式錯誤，用法: WALKSET SPD HV <值> 或 WALKSET SPD MV <值>"));
-        }
-      } else if (paramName == "CUR") {
-        // 格式: WALKSET CUR <HV|MV> <值>
-        String curArgs = params.substring(spacePos + 1);
-        curArgs.trim();
-        int curSpacePos = curArgs.indexOf(' ');
-        if (curSpacePos > 0) {
-          String curGroup = curArgs.substring(0, curSpacePos);
-          curGroup.toUpperCase();
-          int curlim = constrain(curArgs.substring(curSpacePos + 1).toInt(), 1, 63);
-
-          if (curGroup == "HV" || curGroup == "MV") {
-            bool wantHV = (curGroup == "HV");
-            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-              if (servoList[i].isHV == wantHV) {
-                safeSetCur(&servoList[i], curlim);
-              }
-            }
-            Serial1.print(F("✅ ")); Serial1.print(curGroup);
-            Serial1.print(F(" 伺服 電流上限 = ")); Serial1.println(curlim);
-          } else {
-            Serial1.println(F("❌ 格式錯誤，用法: WALKSET CUR HV <值> 或 WALKSET CUR MV <值>"));
-          }
-        } else {
-          Serial1.println(F("❌ 格式錯誤，用法: WALKSET CUR HV <值> 或 WALKSET CUR MV <值>"));
-        }
-      } else if (paramName == "TMP") {
-        // 格式: WALKSET TMP <HV|MV> <值>
-        String tmpArgs = params.substring(spacePos + 1);
-        tmpArgs.trim();
-        int tmpSpacePos = tmpArgs.indexOf(' ');
-        if (tmpSpacePos > 0) {
-          String tmpGroup = tmpArgs.substring(0, tmpSpacePos);
-          tmpGroup.toUpperCase();
-          int tmplim = constrain(tmpArgs.substring(tmpSpacePos + 1).toInt(), 1, 127);
-
-          if (tmpGroup == "HV" || tmpGroup == "MV") {
-            bool wantHV = (tmpGroup == "HV");
-            for (int i = 0; i < TOTAL_SERVO_NUM; i++) {
-              if (servoList[i].isHV == wantHV) {
-                safeSetTmp(&servoList[i], tmplim);
-              }
-            }
-            Serial1.print(F("✅ ")); Serial1.print(tmpGroup);
-            Serial1.print(F(" 伺服 溫度上限 = ")); Serial1.println(tmplim);
-          } else {
-            Serial1.println(F("❌ 格式錯誤，用法: WALKSET TMP HV <值> 或 WALKSET TMP MV <值>"));
-          }
-        } else {
-          Serial1.println(F("❌ 格式錯誤，用法: WALKSET TMP HV <值> 或 WALKSET TMP MV <值>"));
+          Serial1.print(F("❌ 格式錯誤，用法: WALKSET ")); Serial1.print(paramName);
+          Serial1.print(F(" HV <值> 或 WALKSET ")); Serial1.print(paramName);
+          Serial1.println(F(" MV <值>"));
         }
       } else {
         Serial1.println(F("❌ 未知參數，可用: LEN, ROLL, PITCH, STRC, SPD, CUR, TMP"));
