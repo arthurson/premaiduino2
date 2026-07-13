@@ -123,7 +123,7 @@ void table_walk_update(tw_walker_t *w, const tw_params_t *params);
  * and not mid-stride), matching WalkGenerator::isWalking() == false. */
 int table_walk_is_stopped(const tw_walker_t *w);
 
-/* Servo routing: given ServoVal[] index (0..16), returns the .pma-style
+/* Servo routing: given ServoVal[] index (0..16), returns the .pma-styleuuuuuuuu
  * servo ID byte (matches kazz's ServoId[] table exactly). Use this to
  * look up your ServoInfo[]/PMA_ROUTES[] entry and get the bus + limits. */
 uint8_t table_walk_servo_pma_id(int index);

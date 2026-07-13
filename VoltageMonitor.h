@@ -77,13 +77,13 @@ inline void checkVoltage() {
   if (voltageData.currentVoltage < VOLTAGE_SHUTDOWN) {
     // ---- 危急：紅色 + 自動關機 ----
     if (!voltageData.warningActive) {
-      Serial1.print(F("\n⚠️ 低電壓警告: "));
+      Serial1.print(F("\n低電壓警告: "));
       Serial1.print(voltageData.currentVoltage);
       Serial1.println(F("V"));
       voltageData.warningActive = true;
     }
     if (!voltageData.shutdownInitiated) {
-      Serial1.println(F("\n🚨 電壓過低！自動關機..."));
+      Serial1.println(F("\n電壓過低！自動關機..."));
       voltageData.shutdownInitiated = true;
       tableWalkSafeStop();
       setLEDOff();
@@ -92,7 +92,7 @@ inline void checkVoltage() {
   } else if (voltageData.currentVoltage < VOLTAGE_WARNING) {
     // ---- 警告：未到關機門檻 ----
     if (!voltageData.warningActive) {
-      Serial1.print(F("\n⚠️ 電壓偏低: "));
+      Serial1.print(F("\n電壓偏低: "));
       Serial1.print(voltageData.currentVoltage);
       Serial1.println(F("V"));
       voltageData.warningActive = true;
@@ -100,7 +100,7 @@ inline void checkVoltage() {
   } else {
     // ---- 正常 ----
     if (voltageData.warningActive) {
-      Serial1.println(F("✅ 電壓恢復正常"));
+      Serial1.println(F("電壓恢復正常"));
       voltageData.warningActive = false;
     }
   }
