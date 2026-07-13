@@ -42,7 +42,7 @@ This project replaces the factory firmware on a PremaidAI (Kondo Kagaku) 25-serv
 - RN42 Bluetooth module (onboard)
 - MPU-6050 IMU (onboard)
 - USB-to-serial programmer capable of flashing STM32F102 (e.g. ST-Link, or USB-serial adapter depending on your board's bootloader setup)
-- 12V 3A DC power supply
+
 
 ## Prerequisites
 
