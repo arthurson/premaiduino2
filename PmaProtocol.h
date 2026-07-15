@@ -125,20 +125,27 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
 // ===== STM32 內部 Flash 底層讀寫（motion storage 專用） =====
 // =========================================================
 // STM32F102CBT6 (128KB Flash)，page size = 1024 bytes（medium-density
-// devices）。喺 Flash 尾部劃一個 60KB 嘅 motion storage 區
-// （跟原裝 60-page 上限），用固定地址（Flash 尾 60KB），因為標準
-// STM32duino linker script 冇提供 "code end" 符號畀我哋自動計。
-// 只要 firmware .bin 大細冇超過 68KB（128KB - 60KB），呢個劃法
-// 就唔會同 code 重疊——你依家 firmware 大約 65KB，仲有 3KB margin，
-// 加完呢批 code 之後要留意實際編譯後大細（Arduino IDE 編譯完會
-// 顯示 "Sketch uses xxx bytes"，要細過 69632 bytes 先安全）。
+// devices）。喺 Flash 尾部劃一個 40KB 嘅 motion storage 區
+// （2026-07 由原裝 60-page 上限縮細到 40 page——實測 10 個 .pma 檔案
+// 總共淨係 39.x KB，60KB 太多浪費咗約 20KB 本可以留俾 code 用嘅
+// flash space），用固定地址（Flash 尾 40KB），因為標準 STM32duino
+// linker script 冇提供 "code end" 符號畀我哋自動計。
+// 只要 firmware .bin 大細冇超過 88KB（128KB - 40KB），呢個劃法
+// 就唔會同 code 重疊（Arduino IDE 編譯完會顯示 "Sketch uses xxx
+// bytes"，要細過 90112 bytes 先安全）。
+//
+// 注意：呢個 40-page 上限唔淨止影響 reserve 幾多 flash，仲會影響
+// handleSaveMotionData()/handleStartMotion() 入面嘅有效 page 範圍
+// 檢查（page >= MOTION_FLASH_PAGE_COUNT 就拒絕）。如果將來想再加
+// 新嘅 .pma 檔案令總大細逼近 40KB，記得同步調大呢個數值同重新編譯，
+// 否則 host 端會收到 MOTION_ERR_ADDRESS 錯誤。
 #define STM32_FLASH_BASE            0x08000000UL
 #define STM32_FLASH_TOTAL_SIZE      (128UL * 1024UL)   // 128KB chip
 #define MOTION_FLASH_PAGE_SIZE      1024u               // 1 page = 1KB，跟原裝協議一致
-#define MOTION_FLASH_PAGE_COUNT     60u                 // 跟原裝 60-page 上限 = 60KB
-#define MOTION_FLASH_RESERVED_SIZE  (MOTION_FLASH_PAGE_COUNT * MOTION_FLASH_PAGE_SIZE)  // 60KB
+#define MOTION_FLASH_PAGE_COUNT     40u                 // 2026-07 由 60 縮到 40（實測10個.pma共39.x KB）
+#define MOTION_FLASH_RESERVED_SIZE  (MOTION_FLASH_PAGE_COUNT * MOTION_FLASH_PAGE_SIZE)  // 40KB
 #define MOTION_FLASH_START_ADDR     (STM32_FLASH_BASE + STM32_FLASH_TOTAL_SIZE - MOTION_FLASH_RESERVED_SIZE)
-// = 0x08000000 + 0x20000 - 0xF000 = 0x08011000
+// = 0x08000000 + 0x20000 - 0xA000 = 0x08016000
 
 // 每個 page 一份 1024-byte 嘅 SRAM staging buffer：host 用
 // WriteMotionData 逐 128-byte 寫入呢度，收齊一個 page 先用

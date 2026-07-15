@@ -5,9 +5,6 @@
 #include <IcsHardSerialClass.h>
 
 // ===== 伺服參數預設值 =====
-// 下面數值係「原廠出廠設定值」，唔係範圍上下限；合法範圍已喺 ICS3.5
-// 官方 Software Manual 確認（Stretch/Speed: 1~127，電流制限: 1~63，
-// 溫度制限: 1~127），同 safeSetSpd/Strc/Cur/Tmp() 入面嘅範圍檢查一致。
 #define DEFAULT_SPEED_HV 127  // HV 伺服速度 (原廠設定值，範圍 1~127)
 #define DEFAULT_SPEED_MV 100  // MV 伺服速度 (原廠設定值，範圍 1~127)
 #define DEFAULT_STRETCH_HV 60   // HV 伺服 Stretch 硬度 (原廠設定值，範圍 1~127)
@@ -18,13 +15,6 @@
 #define DEFAULT_TMP_MV 40    // MV 伺服溫度制限值 (原廠設定值，範圍 1~127，數值越細代表溫度越高)
 
 // ===== 25軸伺服資訊 =====
-// 呢個係純資料表，唔含任何邏輯。firmware（.ino）係呢份資料嘅唯一權威——
-// homePosition/minAngle/maxAngle 呢啲數值係手動實測校準，唔可以被 HTML
-// 工具或者其他檔案獨立覆寫。要改任何一隻伺服嘅規格，直接改呢度就得。
-//
-// include 呢個檔案之前，主 .ino 要已經定義咗：
-//   - icsHV / icsMV（IcsHardSerialClass 物件）
-// 伺服參數預設值（DEFAULT_SPEED/STRETCH/CUR/TMP）已經喺呢個檔案自己定義。
 struct ServoInfo {
   uint8_t binaryID;
   uint8_t servoID;
@@ -68,7 +58,7 @@ inline ServoInfo servoList[] = {
   // ===== MV群 (上半身) - binaryID 21-31 =====
   { 21, 1, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部前後", 7200, 8400, false, true, 7500 },
   { 22, 2, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部轉向", 5000, 10000, false, true, 7500 },
-  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, true, 7500 },  // 未駁線
+  { 23, 3, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "頭部側傾", 6900, 8100, false, false, 7500 },  // 未駁線
   { 24, 4, 9500, 9500, DEFAULT_SPEED_MV, &icsMV, "右肩側擺", 7450, 10350, false, true, 9500 },  // 官方中立值非7500
   { 25, 5, 5500, 5500, DEFAULT_SPEED_MV, &icsMV, "左肩側擺", 4550, 7550, false, true, 5500 },   // 官方中立值非7500
   { 26, 6, 7500, 7500, DEFAULT_SPEED_MV, &icsMV, "右臂轉向", 4000, 11000, false, true, 7500 },

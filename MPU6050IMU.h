@@ -136,6 +136,21 @@ inline void imuCalibrateGyro(uint16_t samples = 200) {
 }
 
 // ===== 讀取姿態（每次 call 讀一次 14 bytes: accel+temp+gyro 連續暫存器）=====
+// ===== Complementary Filter 參數 =====
+// 純 accelerometer 算出嚟嘅 pitch/roll 對震動/雜訊好敏感——機身/servo
+// 郁動產生嘅瞬間震動會令 atan2() 讀數跳動，喺 balance 疊加落 servo
+// 嗰刻，呢種跳動會被放大成明顯震盪（表現為「B ON 就不斷震」）。
+// Complementary filter 用陀螺角速度做短時間積分（反應快、無雜訊，
+// 但會長期漂移），再用 accelerometer 嘅角度做長期修正（無漂移，但
+// 短時間內嘈），兩者以 alpha 混合，取兩家之長。
+// alpha 越接近 1，越信任陀螺（跟得快但長遠會漂移）；
+// 越接近 0，越信任 accel（穩定不漂移但短時間內震盪明顯）。
+#define IMU_FILTER_ALPHA 0.98f
+
+// 濾波後嘅角度是否已經初始化——開機/校正完第一次 imuUpdate() 要
+// 用純 accel 讀數做起點，之後先開始用濾波器遞歸更新。
+inline bool imuFilterInitialized = false;
+
 // 淨係做讀取＋簡單 pitch/roll 計算，唔做任何控制決策 —— 呢個模組只負責
 // 感測，行走/平衡邏輯要用呢啲值嘅話由 caller (.ino) 自己決定點用。
 inline bool imuUpdate() {
@@ -145,6 +160,12 @@ inline bool imuUpdate() {
   if (!imuReadBytes(MPU6050_REG_ACCEL_XOUT_H, buf, 14)) {
     return false;  // 讀取失敗：唔更新數據，保留上一次有效值
   }
+
+  unsigned long nowMs = millis();
+  float dt = (imuData.lastReadMs == 0) ? 0.0f : (nowMs - imuData.lastReadMs) / 1000.0f;
+  // dt 過大（例如剛開機、或者 imuUpdate() 好耐冇被 call 過）代表積分
+  // 會唔準，呢種情況跳過陀螺積分，淨係用返 accel 讀數做起點。
+  if (dt > 0.5f) dt = 0.0f;
 
   imuData.accelRawX = (int16_t)((buf[0] << 8) | buf[1]);
   imuData.accelRawY = (int16_t)((buf[2] << 8) | buf[3]);
@@ -168,12 +189,31 @@ inline bool imuUpdate() {
   //   X 軸 = 左右傾（左倾時 accelX 明顯變負）
   //   Z 軸 = 前後傾（前倾時 accelZ 明顯變負，但要扣走安裝零偏先準）
   float accelZCorrected = imuData.accelZ - MPU6050_ACCEL_Z_MOUNT_OFFSET;
-  imuData.pitch = atan2f(-accelZCorrected,
-                          sqrtf(imuData.accelX * imuData.accelX +
-                                imuData.accelY * imuData.accelY)) * 180.0f / PI;
-  imuData.roll = atan2f(imuData.accelX, imuData.accelY) * 180.0f / PI;
+  float accelPitch = atan2f(-accelZCorrected,
+                             sqrtf(imuData.accelX * imuData.accelX +
+                                   imuData.accelY * imuData.accelY)) * 180.0f / PI;
+  float accelRoll = atan2f(imuData.accelX, imuData.accelY) * 180.0f / PI;
 
-  imuData.lastReadMs = millis();
+  if (!imuFilterInitialized || dt <= 0.0f) {
+    // 第一次讀數，或者 dt 唔可靠：直接用 accel 角度做起點，
+    // 唔做混合（冇歷史值可以積分）。
+    imuData.pitch = accelPitch;
+    imuData.roll = accelRoll;
+    imuFilterInitialized = true;
+  } else {
+    // Complementary filter：
+    //   新角度 = alpha * (舊角度 + 陀螺角速度*dt) + (1-alpha) * accel角度
+    // gyroX 對應 accelX 呢條軸（roll），gyroZ 對應前後傾（pitch）—
+    // 因為 accelZ 驅動 pitch、accelX 驅動 roll，MPU6050 陀螺同加速度計
+    // 三軸物理上對齊同一組軸，故沿用同軸對應：X軸角速度→roll積分，
+    // Z軸角速度→pitch積分。
+    imuData.pitch = IMU_FILTER_ALPHA * (imuData.pitch + imuData.gyroZ * dt)
+                     + (1.0f - IMU_FILTER_ALPHA) * accelPitch;
+    imuData.roll = IMU_FILTER_ALPHA * (imuData.roll + imuData.gyroX * dt)
+                    + (1.0f - IMU_FILTER_ALPHA) * accelRoll;
+  }
+
+  imuData.lastReadMs = nowMs;
   return true;
 }
 

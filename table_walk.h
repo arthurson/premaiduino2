@@ -110,22 +110,10 @@ typedef struct {
 void tw_params_init(tw_params_t *p);
 void tw_walker_init(tw_walker_t *w);
 
-/* Advance one tick of the gait. Call this at the ORIGINAL fixed rate:
- * every 15ms * TickSpeed. kazz used TickSpeed=9 -> 135ms/tick (7.4 FPS)
- * matching the ICS protocol's 15ms-tick SPD field. If you want smoother
- * motion, lower TickSpeed (there's headroom -- 20-frame table wants a
- * higher tick rate than the 10-frame table did to look equally smooth
- * over the same real-world stride duration; consider TickSpeed=4 or 5,
- * i.e. ~60-75ms/tick, as a starting point and tune by feel). */
 void table_walk_update(tw_walker_t *w, const tw_params_t *params);
 
-/* Convenience: returns 1 if the walker is fully idle (state==TW_STOPPED
- * and not mid-stride), matching WalkGenerator::isWalking() == false. */
 int table_walk_is_stopped(const tw_walker_t *w);
 
-/* Servo routing: given ServoVal[] index (0..16), returns the .pma-styleuuuuuuuu
- * servo ID byte (matches kazz's ServoId[] table exactly). Use this to
- * look up your ServoInfo[]/PMA_ROUTES[] entry and get the bus + limits. */
 uint8_t table_walk_servo_pma_id(int index);
 
 #ifdef __cplusplus
