@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>プリメイドAI 控制器 - PMA 0x18/0x19 官方協議</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        body {
+            background: #1a1a2e;
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 10px;
+        }
+        h1 {
+            color: #00d4ff;
+            text-align: center;
+            margin: 0 0 5px 0;
+            font-size: 1.8em;
+        }
+        h1 small {
+            font-size: 14px;
+            color: #888;
+            display: block;
+        }
+
+        .top-control-bar {
+            background: #16213e;
+            border-radius: 4px;
+            padding: 10px 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            border: 1px solid #0f3460;
+        }
+        .btn {
+            background: #00d4ff;
+            color: #1a1a2e;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 13px;
+            transition: 0.2s;
+            white-space: nowrap;
+        }
+        .btn:hover {
+            background: #00b8e6;
+            transform: scale(1.02);
+        }
+        .btn-danger {
+            background: #ff4444;
+            color: white;
+        }
+        .btn-success {
+            background: #00cc66;
+            color: white;
+        }
+        .btn-home {
+            background: #ffaa00;
+            color: black;
+        }
+        .btn-free {
+            background: #9b59b6;
+            color: white;
+        }
+        .btn-primary {
+            background: #1971c2;
+            color: white;
+        }
+        .btn-stretch {
+            background: #e67e22;
+            color: white;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .status {
+            background: #0f3460;
+            padding: 5px 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .selected-servo-hint {
+            background: #ffaa00;
+            color: #1a1a2e;
+            padding: 5px 15px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        .separator {
+            width: 1px;
+            height: 28px;
+            background: #0f3460;
+            margin: 0 5px;
+        }
+        .cmd-input-area {
+            background: #0f3460;
+            padding: 8px 15px;
+            border-radius: 4px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .cmd-input {
+            background: #1a1a2e;
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+            flex: 1;
+            outline: none;
+        }
+        .cmd-input:focus {
+            border-color: #ffaa00;
+        }
+
+        .main-layout {
+            display: flex;
+            gap: 12px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .robot-diagram {
+            width: 180px;
+            background: #16213e;
+            border-radius: 4px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .part-button {
+            width: 100%;
+            padding: 12px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
+            font-weight: bold;
+            text-align: center;
+            transition: 0.2s;
+            color: white;
+        }
+        .part-button.head {
+            background: #9b59b6;
+        }
+        .part-button.hand {
+            background: #3498db;
+        }
+        .part-button.leg {
+            background: #e67e22;
+        }
+        .part-button.active {
+            border: 2px solid #00d4ff;
+            box-shadow: 0 0 10px #00d4ff;
+        }
+
+        .control-panel {
+            flex: 1;
+            background: #16213e;
+            border-radius: 4px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #0f3460;
+        }
+        .panel-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        .panel-meta {
+            background: #0f3460;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.75em;
+            color: #aaa;
+        }
+
+        .servo-container {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+
+        .split-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            height: 100%;
+        }
+        .split-left, .split-right {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        .split-title {
+            color: #888;
+            font-size: 0.85em;
+            text-align: center;
+            padding: 4px;
+            background: #0f3460;
+            border-radius: 4px;
+        }
+
+        .servo-row {
+            background: #0f3460;
+            border-radius: 4px;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-left: 4px solid;
+            transition: 0.2s;
+        }
+        .servo-row.MV {
+            border-left-color: #00d4ff;
+        }
+        .servo-row.HV {
+            border-left-color: #ffaa00;
+        }
+        .servo-row.active-inc {
+            background: #00cc66 !important;
+        }
+        .servo-row.active-dec {
+            background: #ff4444 !important;
+        }
+        .servo-row.selected {
+            outline: 2px solid #00d4ff;
+        }
+
+        .servo-info {
+            flex: 2;
+            min-width: 100px;
+        }
+        .servo-name {
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        .servo-detail {
+            font-size: 0.7em;
+            color: #aaa;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .binary-id {
+            background: #00d4ff22;
+            color: #00d4ff;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .home-star {
+            color: #ffaa00;
+            font-weight: bold;
+        }
+        .shortkey-badge {
+            background: #00d4ff;
+            color: #1a1a2e;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .shortkey-badge:hover {
+            background: #ffaa00;
+        }
+
+        .controls-wrapper {
+            flex: 3;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .angle-control, .speed-control, .stretch-control {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            background: #1a1a2e;
+            padding: 2px 5px;
+            border-radius: 4px;
+        }
+        .angle-control {
+            border-left: 2px solid #00d4ff;
+        }
+        .speed-control {
+            border-left: 2px solid #ffaa00;
+        }
+        .stretch-control {
+            border-left: 2px solid #e67e22;
+        }
+        .angle-label, .speed-label, .stretch-label {
+            font-size: 0.65em;
+            font-weight: bold;
+        }
+        .angle-label { color: #00d4ff; }
+        .speed-label { color: #ffaa00; }
+        .stretch-label { color: #e67e22; }
+        .btn-angle, .btn-speed, .btn-stretch-small {
+            background: #0f3460;
+            border: none;
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-angle {
+            color: #00d4ff;
+        }
+        .btn-speed {
+            color: #ffaa00;
+        }
+        .btn-stretch-small {
+            color: #e67e22;
+        }
+        .btn-angle:hover {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+        .btn-speed:hover {
+            background: #ffaa00;
+            color: #1a1a2e;
+        }
+        .btn-stretch-small:hover {
+            background: #e67e22;
+            color: #1a1a2e;
+        }
+        .angle-input, .speed-input, .stretch-input {
+            background: #1a1a2e;
+            border: 1px solid;
+            border-radius: 4px;
+            padding: 3px 3px;
+            font-family: monospace;
+            font-size: 0.85em;
+            text-align: center;
+            outline: none;
+        }
+        .angle-input {
+            color: #00d4ff;
+            border-color: #00d4ff;
+            width: 60px;
+        }
+        .speed-input {
+            color: #ffaa00;
+            border-color: #ffaa00;
+            width: 45px;
+        }
+        .stretch-input {
+            color: #e67e22;
+            border-color: #e67e22;
+            width: 45px;
+        }
+
+        .bottom-dual {
+            display: flex;
+            gap: 12px;
+            height: 200px;
+            flex-shrink: 0;
+        }
+        .gyro-section, .log-section {
+            flex: 1;
+            background: #16213e;
+            border-radius: 4px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+        .gyro-header, .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .gyro-title {
+            color: #9b59b6;
+            font-weight: bold;
+            font-size: 0.95em;
+        }
+        .log-title {
+            color: #00d4ff;
+            font-weight: bold;
+            font-size: 0.95em;
+        }
+        .gyro-content, .log-content {
+            flex: 1;
+            background: #0f3460;
+            border-radius: 4px;
+            padding: 8px;
+            font-family: monospace;
+            font-size: 11px;
+            overflow-y: auto;
+            line-height: 1.4;
+        }
+        .gyro-content {
+            color: #9b59b6;
+        }
+        .log-content {
+            color: #00d4ff;
+        }
+        .log-sent { color: #00d4ff; }
+        .log-received { color: #00cc66; }
+        .log-binary { color: #ffaa00; }
+        .copy-btn {
+            background: #0f3460;
+            color: #aaa;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .copy-btn:hover {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f3460;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #00d4ff;
+            border-radius: 0px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🤖 プリメイドAI 控制器 <small>PMA 0x18/0x19 官方協議 | 左右鍵扭力 | 可手動輸入指令</small></h1>
+
+    <div class="top-control-bar">
+        <button class="btn" id="connectBtn">🔌 連接</button>
+        <button class="btn btn-danger" id="disconnectBtn" disabled>❌ 斷開</button>
+        <button class="btn btn-success" id="scanBtn">🔍 掃描</button>
+        <span class="separator"></span>
+
+        <button class="btn btn-home" id="homeAllBtn">🏠 全部HOME</button>
+        <button class="btn btn-home" id="homeHeadBtn">👤 頭HOME</button>
+        <button class="btn btn-home" id="homeHandBtn">🖐️ 手HOME</button>
+        <button class="btn btn-home" id="homeLegBtn">🦶 腳HOME</button>
+        <span class="separator"></span>
+
+        <button class="btn btn-free" id="freeHeadBtn">💤 頭脫力</button>
+        <button class="btn btn-free" id="freeHandBtn">💤 雙手脫力</button>
+        <button class="btn btn-free" id="freeLegBtn">💤 雙腳脫力</button>
+        <button class="btn btn-free" id="freeAllBtn">💤 全部脫力</button>
+        <span class="separator"></span>
+
+        <button class="btn btn-primary" id="gyroBtn">📊 陀螺儀</button>
+        <button class="btn btn-stretch" id="readAllBtn">📖 讀取全部角度</button>
+
+        <div class="status" id="status">⚡ 未連接</div>
+        <div class="selected-servo-hint" id="selectedHint">⚡ 未選中伺服</div>
+    </div>
+
+    <div class="cmd-input-area">
+        <span style="color:#00d4ff; font-size:12px;">📟 手動指令:</span>
+        <input type="text" class="cmd-input" id="customCmd" placeholder="HEX: 83 3A 4C  |  ASCII: S HV 3 7500 30">
+        <button class="btn" id="sendCustomBtn">📤 發送</button>
+        <button class="btn" id="sendHexBtn">🔢 發送HEX</button>
+        <span style="color:#888; font-size:11px;">支援ASCII或HEX(空格分隔)</span>
+    </div>
+
+    <div class="main-layout">
+        <div class="robot-diagram">
+            <button class="part-button head active" id="navHead">👤 頭部</button>
+            <button class="part-button hand" id="navHand">🖐️ 手部</button>
+            <button class="part-button leg" id="navLeg">🦶 腳部</button>
+        </div>
+
+        <div class="control-panel" id="controlPanel">
+            <div class="panel-header">
+                <span class="panel-title" id="panelTitle">👤 頭部控制</span>
+                <div class="panel-meta">
+                    🎮 上下:速度 | 左右:扭力
+                </div>
+            </div>
+            <div class="servo-container" id="servoContainer"></div>
+        </div>
+    </div>
+
+    <div class="bottom-dual">
+        <div class="gyro-section">
+            <div class="gyro-header">
+                <div class="gyro-title">📊 陀螺儀數據</div>
+                <div>
+                    <button class="copy-btn" id="copyGyroBtn">📋 複製</button>
+                    <button class="copy-btn" id="clearGyroBtn">清除</button>
+                </div>
+            </div>
+            <div class="gyro-content" id="gyroContent">等待陀螺儀數據…</div>
+        </div>
+        <div class="log-section">
+            <div class="log-header">
+                <div class="log-title">📋 通訊記錄 (ICS Binary顯示)</div>
+                <div>
+                    <button class="copy-btn" id="copyLogBtn">📋 複製</button>
+                    <button class="copy-btn" id="clearLogBtn">清除</button>
+                </div>
+            </div>
+            <div class="log-content" id="logContent">[系統] 控制器啟動 - PMA 0x18/0x19 官方協議</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        // ========== 伺服定義 (HV:1-14, MV:21-31) ==========
+        const SERVOS = [
+            { id:21, nameZh:'頭部俯仰', min:7200, max:8400, home:7500, group:'MV', part:'head', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:22, nameZh:'頭部左右', min:5000, max:10000, home:7500, group:'MV', part:'head', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:23, nameZh:'頭部側傾', min:6900, max:8100, home:7500, group:'MV', part:'head', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:1, nameZh:'右肩 pitch', min:4300, max:11500, home:10200, group:'HV', part:'rhand', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:24, nameZh:'右肩 roll',  min:7450, max:10350, home:9500, group:'MV', part:'rhand', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:9500 },
+            { id:26, nameZh:'右上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:28, nameZh:'右肘 pitch', min:7100, max:11000, home:7500, group:'MV', part:'rhand', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:30, nameZh:'右手腕 yaw', min:3500, max:11500, home:5000, group:'MV', part:'rhand', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:2, nameZh:'左肩 pitch', min:3500, max:10700, home:4700, group:'HV', part:'lhand', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:25, nameZh:'左肩 roll',  min:4550, max:7550, home:5500, group:'MV', part:'lhand', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64, baselineCenter:5500 },
+            { id:27, nameZh:'左上臂 yaw', min:4000, max:11000, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:29, nameZh:'左肘 pitch', min:4000, max:7900, home:7500, group:'MV', part:'lhand', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:31, nameZh:'左手腕 yaw', min:3500, max:11500, home:10000, group:'MV', part:'lhand', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:3, nameZh:'右髖 yaw',   min:6530, max:9030, home:7780, group:'HV', part:'rleg', shortKey:{ dec:'q', inc:'w' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:5, nameZh:'右髖 roll',  min:6700, max:8300, home:7400, group:'HV', part:'rleg', shortKey:{ dec:'e', inc:'r' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:7, nameZh:'右大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'t', inc:'y' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:9, nameZh:'右膝 pitch', min:3950, max:7600, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'u', inc:'i' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:11, nameZh:'右踝 pitch', min:5700, max:8300, home:7500, group:'HV', part:'rleg', shortKey:{ dec:'o', inc:'p' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:13, nameZh:'右踝 roll',  min:6800, max:9150, home:7825, group:'HV', part:'rleg', shortKey:{ dec:'[', inc:']' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:4, nameZh:'左髖 yaw',   min:6250, max:8750, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'a', inc:'s' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:6, nameZh:'左髖 roll',  min:6700, max:8300, home:7600, group:'HV', part:'lleg', shortKey:{ dec:'d', inc:'f' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:8, nameZh:'左大腿 pitch', min:4700, max:10200, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'g', inc:'h' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:10, nameZh:'左膝 pitch', min:7400, max:11050, home:7500, group:'HV', part:'lleg', shortKey:{ dec:'j', inc:'k' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:12, nameZh:'左踝 pitch', min:6750, max:9350, home:7550, group:'HV', part:'lleg', shortKey:{ dec:'l', inc:';' }, speed:30, stretch:64, baselineCenter:7500 },
+            { id:14, nameZh:'左踝 roll',  min:6200, max:8450, home:7450, group:'HV', part:'lleg', shortKey:{ dec:'\'', inc:'\\' }, speed:30, stretch:64, baselineCenter:7500 }
+        ];
+
+        // ========== 全域變數 ==========
+        // 0x18 封包嘅共用 SPD tick 值（1 tick = 15ms，.ino 內部定義）。
+        // 呢個值控制成個 0x18 封包入面所有 servo 移動去目標角度嘅耗時，
+        // 同 servoList 個別 speed 屬性（經 0x19 設定）係兩個獨立概念：
+        // 0x19 speed 係伺服硬件本身嘅轉動速度上限，0x18 SPD tick 係
+        //「呢次移動預期用幾耐內插完成」。
+        const DEFAULT_SPD_TICKS = 10;
+
+
+        let currentPart = 'head';
+        let port = null, reader = null;
+        let currentAngles = {};
+        let currentStretch = {};
+        let selectedServo = null;
+        let pressedKeys = new Set();
+        let repeatTimer = null, activeServo = null, activeDelta = 0, isKeyHeld = false;
+        let activeAdjustType = null;
+
+        SERVOS.forEach(s => { 
+            currentAngles[`${s.group}_${s.id}`] = s.home;
+            currentStretch[`${s.group}_${s.id}`] = s.stretch;
+        });
+
+        // ========== 輔助函式 ==========
+        function addLog(msg, type='info', binaryHex = null) {
+            const log = document.getElementById('logContent');
+            const time = new Date().toLocaleTimeString();
+            let cls = '';
+            if(type === 'sent') cls = 'log-sent';
+            else if(type === 'received') cls = 'log-received';
+            else if(type === 'binary') cls = 'log-binary';
+            
+            if(binaryHex) {
+                log.innerHTML += `<div><span class="${cls}">[${time}] ${msg} [${binaryHex}]</span></div>`;
+            } else {
+                log.innerHTML += `<div><span class="${cls}">[${time}] ${msg}</span></div>`;
+            }
+            log.scrollTop = log.scrollHeight;
+            if(log.children.length > 200) log.removeChild(log.firstChild);
+        }
+        
+        function addGyro(msg) {
+            const g = document.getElementById('gyroContent');
+            const time = new Date().toLocaleTimeString();
+            g.innerHTML += `<div>[${time}] ${msg}</div>`;
+            g.scrollTop = g.scrollHeight;
+            if(g.children.length > 50) g.removeChild(g.firstChild);
+        }
+        
+        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        // ========== binaryID → pma-style servo ID 轉換 ==========
+        // 呢個 controller 用嘅係 servoList 嘅 binaryID（HV: 1~14, MV: 21~31），
+        // 但 0x18/0x19 封包用嘅係 .ino/findServoByPmaId() 嗰套 pma-style ID：
+        //   HV: pmaId = binaryID * 2          (1->2, 2->4 ... 14->28)
+        //   MV: pmaId = (binaryID - 20)*2 + 1  (21->3, 22->5 ... 31->23)
+        // 對照 .ino: binaryID = 20 + (pmaId-1)/2  =>  pmaId = (binaryID-20)*2 + 1
+        function binaryIdToPmaId(group, binaryId) {
+            if (group === 'HV') return binaryId * 2;
+            return (binaryId - 20) * 2 + 1;
+        }
+
+        // ========== 0x18/0x19 封包 checksum 同組包 ==========
+        // 封包格式: [LEN] [CMD] ...payload... [checksum]
+        // LEN = 總長度（含自己同 checksum），checksum = LEN ^ CMD ^ 全部 payload byte
+        function buildPmaPacket(cmd, payload) {
+            const len = payload.length + 3; // LEN + CMD + payload + checksum
+            let checksum = len ^ cmd;
+            for (const b of payload) checksum ^= b;
+            return [len, cmd, ...payload, checksum];
+        }
+
+        // 0x18: [00(保留), SPD, {pmaID, LO, HI} x N]
+        // angle==0 係官方「脫力」特殊值（唔係正常角度 0），唔經轉換直送。
+        //
+        // 重要：.ino 嘅 pmaApplyServoAngle() 收到 rawAngle 之後，會再做
+        //   target = servo.homePosition + (rawAngle - servo.baselineCenter)
+        // 即係 MCU 自己已經做咗一次「baselineCenter -> homePosition」嘅轉換。
+        // 如果呢度直接送 UI 顯示嘅實際角度（即 servo.home，例如 HV1=10200），
+        // MCU 會再疊多一次 offset，變成 homePosition 兩次疊加，令目標角度
+        // 離譜甚至爆 min/max（HV1/HV2 呢類 homePosition 遠離 7500 嘅 servo
+        // 影響最明顯）。所以呢度要做返轉換：
+        //   rawAngleToSend = displayAngle - servo.homePosition + servo.baselineCenter
+        // 咁樣 MCU 嗰邊做完佢自己嘅轉換之後，先啱啱好等於 displayAngle。
+        function buildCmd18(spdTicks, servoAngles) {
+            const payload = [0x00, spdTicks & 0xFF];
+            for (const { group, id, angle } of servoAngles) {
+                const pmaId = binaryIdToPmaId(group, id);
+                let rawAngle;
+                if (angle === 0) {
+                    rawAngle = 0; // 脫力特殊值，唔做轉換
+                } else {
+                    const servo = SERVOS.find(s => s.group === group && s.id === id);
+                    const baseline = servo ? servo.baselineCenter : 7500;
+                    const home = servo ? servo.home : 7500;
+                    rawAngle = angle - home + baseline;
+                }
+                payload.push(pmaId, rawAngle & 0xFF, (rawAngle >> 8) & 0xFF);
+            }
+            return buildPmaPacket(0x18, payload);
+        }
+
+        // 0x19: [subType(00=SPEED|10=STRETCH), {pmaID, value} x N]
+        function buildCmd19(subType, servoValues) {
+            const payload = [subType];
+            for (const { group, id, value } of servoValues) {
+                const pmaId = binaryIdToPmaId(group, id);
+                payload.push(pmaId, value & 0xFF);
+            }
+            return buildPmaPacket(0x19, payload);
+        }
+
+
+        async function sendBinary(packet) {
+            if(!port) { addLog('❌ 未連接','error'); return false; }
+            try {
+                const writer = port.writable.getWriter();
+                await writer.write(new Uint8Array(packet));
+                writer.releaseLock();
+                const hex = packet.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+                addLog(`📤 [ICS]`, 'binary', hex);
+                return true;
+            } catch(e) {
+                addLog(`❌ 發送失敗: ${e.message}`, 'error');
+                return false;
+            }
+        }
+        
+        async function sendASCII(cmd) {
+            if(!port) return false;
+            try {
+                const writer = port.writable.getWriter();
+                await writer.write(new TextEncoder().encode(cmd + '\n'));
+                writer.releaseLock();
+                addLog(`📤 ${cmd}`, 'sent');
+                return true;
+            } catch(e) {
+                addLog(`❌ 發送失敗: ${e.message}`, 'error');
+                return false;
+            }
+        }
+
+        // ========== 0x18/0x19 官方協議功能 ==========
+        // 注意：呢度嘅 group/id 係 servoList 嘅 binaryID（例如 HV id=1, MV id=21），
+        // buildCmd18/buildCmd19 內部會自動轉做 pma-style servo ID。
+        async function sendSpeed(group, id, speed) {
+            const packet = buildCmd19(0x00, [{ group, id, value: speed }]);
+            return sendBinary(packet);
+        }
+
+        async function sendPosition(group, id, angle) {
+            const packet = buildCmd18(DEFAULT_SPD_TICKS, [{ group, id, angle }]);
+            return sendBinary(packet);
+        }
+
+        async function sendStretch(group, id, stretch) {
+            if (stretch < 1) stretch = 1;
+            if (stretch > 127) stretch = 127;
+            const packet = buildCmd19(0x10, [{ group, id, value: stretch }]);
+            return sendBinary(packet);
+        }
+
+        // 0x18 官方脫力語意：angle==0 = 脫力（唔係正常角度值 0）
+        async function sendFree(group, id) {
+            const packet = buildCmd18(DEFAULT_SPD_TICKS, [{ group, id, angle: 0 }]);
+            return sendBinary(packet);
+        }
+
+        async function sendCommand(group, id, angle, speed) {
+            await sendSpeed(group, id, speed);
+            await delay(5);
+            await sendPosition(group, id, angle);
+            return true;
+        }
+
+        // ========== 讀取角度 (使用 ASCII) ==========
+        async function readAngle(group, id) {
+            return new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    resolve(null);
+                }, 500);
+                
+                let responseHandler = null;
+                
+                const tempReader = async () => {
+                    if(!port || !port.readable) return;
+                    try {
+                        const tmpReader = port.readable.getReader();
+                        const decoder = new TextDecoder();
+                        let buffer = '';
+                        
+                        while(true) {
+                            const {value, done} = await tmpReader.read();
+                            if(done) break;
+                            buffer += decoder.decode(value);
+                            let lines = buffer.split('\n');
+                            buffer = lines.pop();
+                            
+                            for(let line of lines) {
+                                const match = line.match(new RegExp(`${group} ID ${id}.*?(\\d+)`));
+                                if(match) {
+                                    clearTimeout(timeout);
+                                    tmpReader.releaseLock();
+                                    resolve(parseInt(match[1]));
+                                    return;
+                                }
+                            }
+                        }
+                        tmpReader.releaseLock();
+                        resolve(null);
+                    } catch(e) {
+                        resolve(null);
+                    }
+                };
+                
+                sendASCII(`? ${group} ${id}`).then(() => {
+                    tempReader();
+                });
+            });
+        }
+        
+        // ========== 讀取全部角度 ==========
+        async function readAllAngles() {
+            if(!port) { alert('請先連接'); return; }
+            addLog('📖 開始讀取所有伺服角度 (使用ASCII)...', 'info');
+            
+            for(let s of SERVOS) {
+                await delay(80);
+                const angle = await readAngle(s.group, s.id);
+                if(angle !== null) {
+                    currentAngles[`${s.group}_${s.id}`] = angle;
+                    const inp = document.getElementById(`input_${s.group}_${s.id}`);
+                    if(inp) inp.value = angle;
+                    addLog(`📥 ${s.group}${s.id} ${s.nameZh} = ${angle}`, 'received');
+                } else {
+                    addLog(`⚠️ ${s.group}${s.id} 讀取超時`, 'info');
+                }
+            }
+            addLog('✅ 讀取完成', 'received');
+        }
+
+        // ========== 渲染 ==========
+        function renderPanel(part) {
+            currentPart = part;
+            document.querySelectorAll('.part-button').forEach(b => b.classList.remove('active'));
+            document.getElementById(`nav${part.charAt(0).toUpperCase() + part.slice(1)}`).classList.add('active');
+
+            let title = part === 'head' ? '👤 頭部控制' : part === 'hand' ? '🖐️ 手部控制' : '🦶 腳部控制';
+            document.getElementById('panelTitle').innerText = title;
+
+            let html = '';
+            if (part === 'head') {
+                html = '<div class="split-left" style="grid-column:span2;">';
+                SERVOS.filter(s => s.part === 'head').forEach(s => html += renderServoRow(s));
+                html += '</div>';
+            } else if (part === 'hand') {
+                html = '<div class="split-panel"><div class="split-left"><div class="split-title">👉 右手</div>';
+                SERVOS.filter(s => s.part === 'rhand').forEach(s => html += renderServoRow(s));
+                html += '</div><div class="split-right"><div class="split-title">👈 左手</div>';
+                SERVOS.filter(s => s.part === 'lhand').forEach(s => html += renderServoRow(s));
+                html += '</div></div>';
+            } else {
+                html = '<div class="split-panel"><div class="split-left"><div class="split-title">🦶 右腳</div>';
+                SERVOS.filter(s => s.part === 'rleg').forEach(s => html += renderServoRow(s));
+                html += '</div><div class="split-right"><div class="split-title">🦶 左腳</div>';
+                SERVOS.filter(s => s.part === 'lleg').forEach(s => html += renderServoRow(s));
+                html += '</div></div>';
+            }
+            document.getElementById('servoContainer').innerHTML = html;
+            attachInputEvents();
+            if (selectedServo) highlightSelected();
+        }
+
+        function renderServoRow(s) {
+            const angle = currentAngles[`${s.group}_${s.id}`] || s.home;
+            const stretch = currentStretch[`${s.group}_${s.id}`] || s.stretch;
+            const decKey = s.shortKey.dec === '\'' ? '\'' : s.shortKey.dec;
+            const incKey = s.shortKey.inc === '\\' ? '\\' : s.shortKey.inc;
+            return `
+                <div class="servo-row ${s.group}" id="row_${s.group}_${s.id}" data-group="${s.group}" data-id="${s.id}">
+                    <div class="servo-info">
+                        <div class="servo-name">${s.nameZh}</div>
+                        <div class="servo-detail">
+                            <span class="binary-id">ID:${s.id}</span>
+                            <span>${s.group}</span>
+                            ${s.home !== 7500 ? '<span class="home-star">★</span>' : ''}
+                            <span class="shortkey-badge" onclick="window.selectByKey('${s.shortKey.dec}')">${decKey}</span>
+                            <span class="shortkey-badge" onclick="window.selectByKey('${s.shortKey.inc}')">${incKey}</span>
+                        </div>
+                    </div>
+                    <div class="controls-wrapper">
+                        <div class="angle-control">
+                            <span class="angle-label">角</span>
+                            <button class="btn-angle" onclick="window.sendDelta('${s.group}',${s.id},-50)">−</button>
+                            <input type="text" class="angle-input" id="input_${s.group}_${s.id}" value="${angle}" data-group="${s.group}" data-id="${s.id}">
+                            <button class="btn-angle" onclick="window.sendDelta('${s.group}',${s.id},50)">+</button>
+                        </div>
+                        <div class="speed-control">
+                            <span class="speed-label">速</span>
+                            <button class="btn-speed" onclick="window.adjustSpeed('${s.group}',${s.id},-5)">−</button>
+                            <input type="text" class="speed-input" id="speed_${s.group}_${s.id}" value="${s.speed}" data-group="${s.group}" data-id="${s.id}">
+                            <button class="btn-speed" onclick="window.adjustSpeed('${s.group}',${s.id},5)">+</button>
+                        </div>
+                        <div class="stretch-control">
+                            <span class="stretch-label">扭</span>
+                            <button class="btn-stretch-small" onclick="window.adjustStretch('${s.group}',${s.id},-10)">−</button>
+                            <input type="text" class="stretch-input" id="stretch_${s.group}_${s.id}" value="${stretch}" data-group="${s.group}" data-id="${s.id}">
+                            <button class="btn-stretch-small" onclick="window.adjustStretch('${s.group}',${s.id},10)">+</button>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function attachInputEvents() {
+            document.querySelectorAll('.angle-input').forEach(inp => {
+                inp.addEventListener('blur', e => {
+                    const g = inp.dataset.group, id = parseInt(inp.dataset.id);
+                    let val = parseInt(inp.value);
+                    const s = SERVOS.find(s => s.group === g && s.id === id);
+                    if (isNaN(val)) { inp.value = s.home; val = s.home; }
+                    if (val < s.min) val = s.min;
+                    if (val > s.max) val = s.max;
+                    inp.value = val;
+                    currentAngles[`${g}_${id}`] = val;
+                    sendCommand(g, id, val, s.speed);
+                });
+            });
+            
+            document.querySelectorAll('.speed-input').forEach(inp => {
+                inp.addEventListener('blur', e => {
+                    const g = inp.dataset.group, id = parseInt(inp.dataset.id);
+                    let sp = parseInt(inp.value);
+                    if (isNaN(sp)) sp = 30;
+                    if (sp < 0) sp = 0;
+                    if (sp > 127) sp = 127;
+                    inp.value = sp;
+                    const s = SERVOS.find(s => s.group === g && s.id === id);
+                    if (s) s.speed = sp;
+                    sendSpeed(g, id, sp);
+                });
+            });
+            
+            document.querySelectorAll('.stretch-input').forEach(inp => {
+                inp.addEventListener('blur', e => {
+                    const g = inp.dataset.group, id = parseInt(inp.dataset.id);
+                    let st = parseInt(inp.value);
+                    if (isNaN(st)) st = 64;
+                    if (st < 1) st = 1;
+                    if (st > 127) st = 127;
+                    inp.value = st;
+                    currentStretch[`${g}_${id}`] = st;
+                    sendStretch(g, id, st);
+                });
+            });
+        }
+
+        function highlightSelected() {
+            document.querySelectorAll('.servo-row').forEach(r => r.classList.remove('selected'));
+            if (selectedServo) {
+                const row = document.getElementById(`row_${selectedServo.group}_${selectedServo.id}`);
+                if (row) row.classList.add('selected');
+                const stretch = currentStretch[`${selectedServo.group}_${selectedServo.id}`] || 64;
+                document.getElementById('selectedHint').innerHTML = `⚡ 選中: ${selectedServo.nameZh} 速度${selectedServo.speed} 扭力${stretch}`;
+            }
+        }
+
+        window.selectByKey = function(key) {
+            const list = SERVOS.filter(s => 
+                s.part === currentPart || 
+                (currentPart === 'hand' && (s.part === 'rhand' || s.part === 'lhand')) ||
+                (currentPart === 'leg' && (s.part === 'rleg' || s.part === 'lleg'))
+            );
+            const s = list.find(s => s.shortKey.dec === key || s.shortKey.inc === key);
+            if (s) { selectedServo = s; highlightSelected(); addLog(`✅ 選中 ${s.nameZh}`, 'info'); }
+        };
+
+        // ========== 操作 ==========
+        window.sendDelta = async function(group, id, delta) {
+            if (!port) { alert('請先連接'); return; }
+            const s = SERVOS.find(s => s.group === group && s.id === id);
+            if (!s) return;
+            const inp = document.getElementById(`input_${group}_${id}`);
+            let cur = parseInt(inp.value);
+            let nv = cur + delta;
+            if (nv < s.min) nv = s.min;
+            if (nv > s.max) nv = s.max;
+            inp.value = nv;
+            currentAngles[`${group}_${id}`] = nv;
+            await sendCommand(group, id, nv, s.speed);
+            const row = document.getElementById(`row_${group}_${id}`);
+            if (row) {
+                row.classList.add(delta < 0 ? 'active-dec' : 'active-inc');
+                setTimeout(() => row.classList.remove('active-dec', 'active-inc'), 300);
+            }
+        };
+
+        window.adjustSpeed = function(group, id, delta) {
+            const s = SERVOS.find(s => s.group === group && s.id === id);
+            if (!s) return;
+            let ns = s.speed + delta;
+            if (ns < 0) ns = 0;
+            if (ns > 127) ns = 127;
+            s.speed = ns;
+            const inp = document.getElementById(`speed_${group}_${id}`);
+            if (inp) inp.value = ns;
+            sendSpeed(group, id, ns);
+            if (selectedServo && selectedServo.group === group && selectedServo.id === id) {
+                highlightSelected();
+            }
+        };
+        
+        window.adjustStretch = function(group, id, delta) {
+            const s = SERVOS.find(s => s.group === group && s.id === id);
+            if (!s) return;
+            let ns = (currentStretch[`${group}_${id}`] || s.stretch) + delta;
+            if (ns < 1) ns = 1;
+            if (ns > 127) ns = 127;
+            currentStretch[`${group}_${id}`] = ns;
+            const inp = document.getElementById(`stretch_${group}_${id}`);
+            if (inp) inp.value = ns;
+            sendStretch(group, id, ns);
+            if (selectedServo && selectedServo.group === group && selectedServo.id === id) {
+                highlightSelected();
+            }
+        };
+
+        // ========== HOME 功能 ==========
+        async function homeMulti(servoList, name) {
+            if (!port) { alert('請先連接'); return; }
+            for (let s of servoList) {
+                const inp = document.getElementById(`input_${s.group}_${s.id}`);
+                if (inp) inp.value = s.home;
+                currentAngles[`${s.group}_${s.id}`] = s.home;
+            }
+            for (let s of servoList) {
+                await sendSpeed(s.group, s.id, 30);
+                await delay(2);
+            }
+            await delay(10);
+            for (let s of servoList) {
+                await sendPosition(s.group, s.id, s.home);
+                await delay(2);
+            }
+            addLog(`🏠 ${name} HOME 完成 (${servoList.length}軸)`, 'received');
+        }
+
+        function homeHeadFunc() { homeMulti(SERVOS.filter(s => s.part === 'head'), '頭部'); }
+        function homeHandFunc() { homeMulti(SERVOS.filter(s => s.part === 'rhand' || s.part === 'lhand'), '手部'); }
+        function homeLegFunc() { homeMulti(SERVOS.filter(s => s.part === 'rleg' || s.part === 'lleg'), '腳部'); }
+        function homeAllFunc() { homeMulti(SERVOS, '全部'); }
+
+        // ========== 脫力 ==========
+        async function freePart(servoList, partName) {
+            if (!port) { alert('請先連接'); return; }
+            addLog(`💤 正在脫力 ${partName}...`, 'info');
+            for (let s of servoList) {
+                await sendFree(s.group, s.id);
+                await delay(15);
+            }
+            addLog(`✅ ${partName} 脫力完成`, 'received');
+        }
+        
+        async function freeAll() {
+            if (!port) { alert('請先連接'); return; }
+            addLog(`💤 正在脫力全部伺服...`, 'info');
+            for (let s of SERVOS) {
+                await sendFree(s.group, s.id);
+                await delay(10);
+            }
+            addLog(`✅ 全部伺服脫力完成`, 'received');
+        }
+        
+        async function freeHead() { await freePart(SERVOS.filter(s => s.part === 'head'), '頭部'); }
+        async function freeHand() { await freePart(SERVOS.filter(s => s.part === 'rhand' || s.part === 'lhand'), '雙手'); }
+        async function freeLeg() { await freePart(SERVOS.filter(s => s.part === 'rleg' || s.part === 'lleg'), '雙腳'); }
+
+        // ========== 掃描 ==========
+        async function scanServos() {
+            if (!port) { alert('請先連接'); return; }
+            addLog('🔍 掃描所有伺服', 'sent');
+            for (let i = 1; i <= 11; i++) {
+                await sendASCII(`? MV ${i}`);
+                await delay(40);
+            }
+            for (let i = 1; i <= 14; i++) {
+                await sendASCII(`? HV ${i}`);
+                await delay(40);
+            }
+        }
+        
+        async function queryGyro() {
+            if (!port) { alert('請先連接'); return; }
+            await sendASCII('G');
+        }
+
+        // ========== 自訂指令 ==========
+        async function sendCustomCommand() {
+            if (!port) { alert('請先連接'); return; }
+            const input = document.getElementById('customCmd').value.trim();
+            if (!input) return;
+            
+            // 檢查是否為 HEX 格式 (空格分隔，每個是 2位 hex)
+            const hexPattern = /^[0-9A-Fa-f]{2}( [0-9A-Fa-f]{2})*$/;
+            if (hexPattern.test(input)) {
+                const bytes = input.split(' ').map(b => parseInt(b, 16));
+                await sendBinary(bytes);
+            } else {
+                // 當作 ASCII 指令
+                await sendASCII(input);
+            }
+        }
+        
+        async function sendHexCommand() {
+            if (!port) { alert('請先連接'); return; }
+            const input = document.getElementById('customCmd').value.trim();
+            if (!input) return;
+            
+            const bytes = input.split(' ').map(b => parseInt(b, 16));
+            if (bytes.some(isNaN)) {
+                addLog('❌ HEX格式錯誤，請用空格分隔，如: 83 3A 4C', 'error');
+                return;
+            }
+            await sendBinary(bytes);
+        }
+
+        // ========== 鍵盤 ==========
+        function startRepeat(s, delta, type) {
+            if (repeatTimer) clearInterval(repeatTimer);
+            activeServo = s;
+            activeDelta = delta;
+            activeAdjustType = type;
+            isKeyHeld = true;
+            
+            if (type === 'angle') window.sendDelta(s.group, s.id, delta);
+            else if (type === 'speed') window.adjustSpeed(s.group, s.id, delta);
+            else if (type === 'stretch') window.adjustStretch(s.group, s.id, delta);
+            
+            repeatTimer = setInterval(() => {
+                if (isKeyHeld && activeServo) {
+                    if (activeAdjustType === 'angle') window.sendDelta(activeServo.group, activeServo.id, activeDelta);
+                    else if (activeAdjustType === 'speed') window.adjustSpeed(activeServo.group, activeServo.id, activeDelta);
+                    else if (activeAdjustType === 'stretch') window.adjustStretch(activeServo.group, activeServo.id, activeDelta);
+                }
+            }, 200); // 每秒5次 (1000ms / 5 = 200ms)
+        }
+        
+        function stopRepeat() {
+            isKeyHeld = false;
+            activeServo = null;
+            activeAdjustType = null;
+            if (repeatTimer) { clearInterval(repeatTimer); repeatTimer = null; }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            const k = e.key;
+            if (document.activeElement?.tagName === 'INPUT') return;
+
+            if (k === '8') { e.preventDefault(); freeHead(); return; }
+            if (k === '9') { e.preventDefault(); freeHand(); return; }
+            if (k === '0') { e.preventDefault(); freeLeg(); return; }
+            if (k === '1') { renderPanel('head'); e.preventDefault(); return; }
+            if (k === '2') { renderPanel('hand'); e.preventDefault(); return; }
+            if (k === '3') { renderPanel('leg'); e.preventDefault(); return; }
+            if (k === '4') { homeAllFunc(); e.preventDefault(); return; }
+            if (k === '5') { homeHeadFunc(); e.preventDefault(); return; }
+            if (k === '6') { homeHandFunc(); e.preventDefault(); return; }
+            if (k === '7') { homeLegFunc(); e.preventDefault(); return; }
+
+            if (selectedServo) {
+                if (k === 'ArrowUp') { e.preventDefault(); window.adjustSpeed(selectedServo.group, selectedServo.id, 5); return; }
+                if (k === 'ArrowDown') { e.preventDefault(); window.adjustSpeed(selectedServo.group, selectedServo.id, -5); return; }
+                if (k === 'ArrowLeft') { e.preventDefault(); window.adjustStretch(selectedServo.group, selectedServo.id, -10); return; }
+                if (k === 'ArrowRight') { e.preventDefault(); window.adjustStretch(selectedServo.group, selectedServo.id, 10); return; }
+            }
+
+            const list = SERVOS.filter(s => 
+                s.part === currentPart || 
+                (currentPart === 'hand' && (s.part === 'rhand' || s.part === 'lhand')) ||
+                (currentPart === 'leg' && (s.part === 'rleg' || s.part === 'lleg'))
+            );
+            const s = list.find(s => s.shortKey.dec === k || s.shortKey.inc === k);
+            if (s) {
+                e.preventDefault();
+                const otherKey = (k === s.shortKey.dec) ? s.shortKey.inc : s.shortKey.dec;
+                if (pressedKeys.has(otherKey)) {
+                    stopRepeat();
+                    sendCommand(s.group, s.id, s.home, s.speed);
+                } else {
+                    selectedServo = s;
+                    highlightSelected();
+                    const delta = (k === s.shortKey.dec) ? -50 : 50;
+                    startRepeat(s, delta, 'angle');
+                }
+                pressedKeys.add(k);
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            pressedKeys.delete(e.key);
+            if (pressedKeys.size === 0) stopRepeat();
+        });
+        window.addEventListener('blur', () => { pressedKeys.clear(); stopRepeat(); });
+
+        // ========== 串口 ==========
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                document.getElementById('status').innerHTML = '✅ 已連接';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                addLog('✅ 串口已連接 - PMA 0x18/0x19 官方協議', 'received');
+                readLoop();
+            } catch (e) { addLog(`❌ 連接失敗: ${e.message}`, 'error'); }
+        }
+        
+        async function disconnectSerial() {
+            if (reader) { try { await reader.cancel(); } catch (e) { } reader = null; }
+            if (port) { try { await port.close(); } catch (e) { } port = null; }
+            document.getElementById('status').innerHTML = '⚡ 未連接';
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            addLog('🔌 已斷開', 'received');
+        }
+        
+        async function readLoop() {
+            if (!port) return;
+            try {
+                reader = port.readable.getReader();
+                const dec = new TextDecoder();
+                let buf = '';
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    if (value) {
+                        buf += dec.decode(value);
+                        let lines = buf.split('\n');
+                        buf = lines.pop();
+                        for (let l of lines) {
+                            l = l.trim();
+                            if (!l) continue;
+                            addLog(l, 'received');
+                            if (l.includes('加速度') || l.includes('陀螺')) addGyro(l);
+                            
+                            const mvMatch = l.match(/MV ID (\d+).*?(\d+)/);
+                            if (mvMatch) {
+                                let id = parseInt(mvMatch[1]);
+                                let ang = parseInt(mvMatch[2]);
+                                const binaryId = id + 20;
+                                const inp = document.getElementById(`input_MV_${binaryId}`);
+                                if (inp && Math.abs(parseInt(inp.value) - ang) > 5) {
+                                    inp.value = ang;
+                                    currentAngles[`MV_${binaryId}`] = ang;
+                                }
+                            }
+                            
+                            const hvMatch = l.match(/HV ID (\d+).*?(\d+)/);
+                            if (hvMatch) {
+                                let id = parseInt(hvMatch[1]);
+                                let ang = parseInt(hvMatch[2]);
+                                const inp = document.getElementById(`input_HV_${id}`);
+                                if (inp && Math.abs(parseInt(inp.value) - ang) > 5) {
+                                    inp.value = ang;
+                                    currentAngles[`HV_${id}`] = ang;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e) { addLog(`❌ 讀取錯誤 ${e.message}`, 'error'); }
+            finally { if (reader) { reader.releaseLock(); reader = null; } }
+        }
+
+        // ========== 初始化 ==========
+        window.onload = function() {
+            renderPanel('head');
+            document.getElementById('navHead').onclick = () => renderPanel('head');
+            document.getElementById('navHand').onclick = () => renderPanel('hand');
+            document.getElementById('navLeg').onclick = () => renderPanel('leg');
+
+            document.getElementById('connectBtn').onclick = connectSerial;
+            document.getElementById('disconnectBtn').onclick = disconnectSerial;
+            document.getElementById('scanBtn').onclick = scanServos;
+            document.getElementById('gyroBtn').onclick = queryGyro;
+            document.getElementById('readAllBtn').onclick = readAllAngles;
+            document.getElementById('freeAllBtn').onclick = freeAll;
+            document.getElementById('sendCustomBtn').onclick = sendCustomCommand;
+            document.getElementById('sendHexBtn').onclick = sendHexCommand;
+
+            document.getElementById('homeAllBtn').onclick = homeAllFunc;
+            document.getElementById('homeHeadBtn').onclick = homeHeadFunc;
+            document.getElementById('homeHandBtn').onclick = homeHandFunc;
+            document.getElementById('homeLegBtn').onclick = homeLegFunc;
+
+            document.getElementById('freeHeadBtn').onclick = freeHead;
+            document.getElementById('freeHandBtn').onclick = freeHand;
+            document.getElementById('freeLegBtn').onclick = freeLeg;
+
+            document.getElementById('clearLogBtn').onclick = () => document.getElementById('logContent').innerHTML = '[系統] 記錄已清除';
+            document.getElementById('clearGyroBtn').onclick = () => document.getElementById('gyroContent').innerHTML = '等待陀螺儀數據…';
+            document.getElementById('copyLogBtn').onclick = () => navigator.clipboard.writeText(document.getElementById('logContent').innerText);
+            document.getElementById('copyGyroBtn').onclick = () => navigator.clipboard.writeText(document.getElementById('gyroContent').innerText);
+        };
+    })();
+</script>
+</body>
+</html>

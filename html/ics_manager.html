@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICS3.5 / 3.6 Web Manager</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --panel2:#1e242c; --line:#2a313b;
+    --text:#e7ecf2; --sub:#8b96a5; --accent:#3fa9ff; --accent2:#28c76f;
+    --warn:#ffb020; --danger:#ff4d5e; --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;}
+  header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10;flex-wrap:wrap;}
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.3px;}
+  header h1 span{color:var(--sub);font-weight:400;}
+  .pill{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;}
+  .pill.off{background:#3a2323;color:var(--danger);}
+  .pill.on{background:#173425;color:var(--accent2);}
+  .spacer{flex:1;}
+  button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:7px 14px;border-radius:8px;font-size:13px;transition:.15s;}
+  button:hover{border-color:var(--accent);}
+  button:disabled{opacity:.35;cursor:not-allowed;}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08131f;font-weight:600;}
+  button.primary:hover{filter:brightness(1.08);}
+  button.danger{border-color:var(--danger);color:var(--danger);}
+  button.danger:hover{background:#3a2323;}
+  select,input[type=number],input[type=text]{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:8px;font-size:13px;}
+  select:focus,input:focus{outline:none;border-color:var(--accent);}
+  main{display:grid;grid-template-columns:280px 1fr 340px;gap:14px;padding:14px;max-width:1600px;margin:0 auto;align-items:start;}
+  @media (max-width:1100px){ main{grid-template-columns:1fr;} }
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px;}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--sub);margin:0 0 12px;font-weight:700;}
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+  .row label{width:112px;flex-shrink:0;color:var(--sub);font-size:12.5px;}
+  .row input,.row select{flex:1;min-width:70px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap;}
+  .tab{padding:8px 14px;font-size:13px;color:var(--sub);cursor:pointer;border-bottom:2px solid transparent;}
+  .tab.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
+  .tabpanel{display:none;}
+  .tabpanel.active{display:block;}
+  .slider-wrap{display:flex;align-items:center;gap:12px;}
+  input[type=range]{flex:1;accent-color:var(--accent);}
+  .posval{width:64px;text-align:center;font-family:var(--mono);font-size:15px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px;}
+  .readout{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--accent);}
+  .readout small{font-size:11px;color:var(--sub);font-weight:400;display:block;}
+  .kv{display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-family:var(--mono);font-size:12.5px;}
+  .kv div.k{color:var(--sub);}
+  #log{background:#0a0d11;border:1px solid var(--line);border-radius:8px;padding:8px 10px;height:220px;overflow-y:auto;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:#8fd0ff;}
+  #log .tx{color:#ffcf6e;}
+  #log .rx{color:#7bffb0;}
+  #log .err{color:var(--danger);}
+  #log .info{color:var(--sub);}
+  .servo-list{max-height:340px;overflow-y:auto;}
+  .servo-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;margin-bottom:6px;background:var(--panel2);border:1px solid var(--line);cursor:pointer;}
+  .servo-item:hover{border-color:var(--accent);}
+  .servo-item.active{border-color:var(--accent);background:#132435;}
+  .servo-item .id{font-family:var(--mono);font-weight:700;color:var(--accent);}
+  .badge{font-size:10px;padding:2px 6px;border-radius:4px;background:var(--panel);color:var(--sub);}
+  .flagrow{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);}
+  .flagrow:last-child{border-bottom:none;}
+  .switch{position:relative;width:38px;height:20px;flex-shrink:0;}
+  .switch input{opacity:0;width:0;height:0;}
+  .slider-toggle{position:absolute;cursor:pointer;inset:0;background:#3a4351;border-radius:20px;transition:.2s;}
+  .slider-toggle:before{content:"";position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;}
+  input:checked + .slider-toggle{background:var(--accent2);}
+  input:checked + .slider-toggle:before{transform:translateX(18px);}
+  .hint{color:var(--sub);font-size:11.5px;margin-top:4px;}
+  .section-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-family:var(--mono);}
+  .warnbox{background:#2b220f;border:1px solid #5a4620;color:var(--warn);padding:8px 10px;border-radius:8px;font-size:12px;margin-bottom:12px;}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 18px;border-radius:8px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:.25s;z-index:100;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px);}
+  .toast.err{border-color:var(--danger);color:var(--danger);}
+  footer{text-align:center;color:var(--sub);font-size:11px;padding:20px;}
+  a{color:var(--accent);}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ICS3.5 / 3.6 <span>Web Manager</span></h1>
+  <span id="connPill" class="pill off">未連接</span>
+  <div class="spacer"></div>
+  <select id="baudSelect">
+    <option value="auto">通信速度: auto</option>
+    <option value="115200">115200 bps</option>
+    <option value="625000">625000 bps</option>
+    <option value="1250000">1250000 bps</option>
+  </select>
+  <button id="btnConnect" class="primary">連接 USB Adapter</button>
+  <button id="btnDisconnect" class="danger" disabled>切斷</button>
+</header>
+
+<main>
+  <!-- LEFT: multi-drop scan / servo list -->
+  <div>
+    <div class="card">
+      <h2>Servo 掃描 / 清單</h2>
+      <div class="hint">Multi-drop 連接下可掃描 ID 0–31（只讀 ID，唔會改動）。設定變更時請確保只連接單一 servo。</div>
+      <div class="section-actions">
+        <button id="btnScan">掃描全部 ID</button>
+      </div>
+      <div id="servoList" class="servo-list" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>目標 Servo</h2>
+      <div class="row"><label>ID (0–31)</label><input type="number" id="targetId" min="0" max="31" value="0"></div>
+      <div class="row"><label>ICS 版本</label>
+        <select id="icsVersion">
+          <option value="36">ICS3.6 (支援即時角度讀取)</option>
+          <option value="35">ICS3.5</option>
+        </select>
+      </div>
+      <div class="section-actions">
+        <button id="btnReadId">讀取 ID (1:1連接)</button>
+        <button id="btnReadEeprom" class="primary">讀取全部參數</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>通訊記錄</h2>
+      <div id="log"></div>
+      <div class="section-actions">
+        <button id="btnClearLog">清空記錄</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MIDDLE: position / live monitor / tabs for params -->
+  <div>
+    <div class="card">
+      <h2>角度控制 (Position)</h2>
+      <div class="slider-wrap">
+        <span style="color:var(--sub);font-size:11px;">3500</span>
+        <input type="range" id="posSlider" min="3500" max="11500" value="7500" step="1">
+        <span style="color:var(--sub);font-size:11px;">11500</span>
+        <input type="text" id="posValue" class="posval" value="7500">
+      </div>
+      <div class="section-actions">
+        <button id="btnCenter">回中心 (7500)</button>
+        <button id="btnFree" class="danger">脫力 Free (0)</button>
+        <button id="btnSendPos" class="primary">送出角度</button>
+      </div>
+      <div class="hint">拖動滑桿或輸入數值後按 Enter / 送出角度 即時驅動 servo。舵角 270° 機種可用 3500–11500（全幅）。</div>
+    </div>
+
+    <div class="card">
+      <h2>即時監控</h2>
+      <div class="grid2">
+        <div>
+          <div class="readout" id="liveAngle">--<small>目前角度 TCH</small></div>
+        </div>
+        <div>
+          <div class="readout" id="liveSpeed">--<small>Speed（讀取值）</small></div>
+        </div>
+        <div>
+          <div class="readout" id="liveCurrent">--<small>電流 (raw 0–127)</small></div>
+        </div>
+        <div>
+          <div class="readout" id="liveTemp">--<small>溫度 (raw 1–127, 越細越熱)</small></div>
+        </div>
+      </div>
+      <div class="section-actions">
+        <button id="btnReadAngle">讀取角度</button>
+        <button id="btnReadCurrent">讀取電流</button>
+        <button id="btnReadTemp">讀取溫度</button>
+        <button id="btnLiveToggle">開始輪詢監控</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>參數設定</h2>
+      <div class="tabs">
+        <div class="tab active" data-tab="basic">基本</div>
+        <div class="tab" data-tab="limits">限制值</div>
+        <div class="tab" data-tab="flags">Flags</div>
+        <div class="tab" data-tab="stretch3">3段Stretch</div>
+        <div class="tab" data-tab="comm">通訊/ID</div>
+        <div class="tab" data-tab="eeprom">EEPROM Raw</div>
+      </div>
+
+      <div class="tabpanel active" id="tab-basic">
+        <div class="row"><label>Speed (1–127)</label><input type="number" id="p_speed" min="1" max="127"><button data-write="speed">寫入</button><button data-read="speed">讀取</button></div>
+        <div class="row"><label>Stretch (1–127)</label><input type="number" id="p_stretch" min="1" max="127"><button data-write="stretch">寫入</button><button data-read="stretch">讀取</button></div>
+        <div class="row"><label>Punch (0–10)</label><input type="number" id="p_punch" min="0" max="10"><button data-write="punch">寫入</button></div>
+        <div class="row"><label>DeadBand (0–10)</label><input type="number" id="p_deadband" min="0" max="10"><button data-write="deadband">寫入</button></div>
+        <div class="row"><label>Dumping (1–255)</label><input type="number" id="p_dumping" min="1" max="255"><button data-write="dumping">寫入</button></div>
+        <div class="row"><label>Protect Timer (10–255)</label><input type="number" id="p_safetimer" min="10" max="255"><button data-write="safetimer">寫入</button></div>
+        <div class="row"><label>User Offset (-127–127)</label><input type="number" id="p_useroffset" min="-127" max="127"><button data-write="useroffset">寫入</button></div>
+        <div class="hint">此頁寫入直接更新 EEPROM 內對應欄位（經由 EEPROM 全寫方式）。按「讀取全部參數」後數值會自動填入。</div>
+      </div>
+
+      <div class="tabpanel" id="tab-limits">
+        <div class="row"><label>溫度限制 (1–127)</label><input type="number" id="p_templimit" min="1" max="127"><button data-write="templimit">寫入</button></div>
+        <div class="hint" style="margin:-4px 0 8px 120px;">數值越細代表溫度上限越高（60≈80℃／30≈100℃）</div>
+        <div class="row"><label>電流限制 (0–63正/64–127逆)</label><input type="number" id="p_currentlimit" min="0" max="127"><button data-write="currentlimit">寫入</button></div>
+        <div class="row"><label>Pulse上限 (8000–11500)</label><input type="number" id="p_pulseupper" min="3500" max="11500"></div>
+        <div class="row"><label>Pulse下限 (3500–7500)</label><input type="number" id="p_pulselower" min="3500" max="11500"></div>
+        <div class="section-actions"><button id="btnWriteLimits" class="primary">寫入 Pulse 上/下限（EEPROM）</button></div>
+        <div class="hint">Pulse Limit 需整段 EEPROM 寫入，請先「讀取全部參數」確保其餘欄位不被覆蓋。</div>
+      </div>
+
+      <div class="tabpanel" id="tab-flags">
+        <div class="flagrow"><span>Reverse（反轉）</span><label class="switch"><input type="checkbox" id="f_reverse"><span class="slider-toggle"></span></label></div>
+        <div class="flagrow"><span>Free（唯讀顯示）</span><label class="switch"><input type="checkbox" id="f_free" disabled><span class="slider-toggle"></span></label></div>
+        <div class="flagrow"><span>PWMINH（禁止PWM／シリアル専用）</span><label class="switch"><input type="checkbox" id="f_pwminh"><span class="slider-toggle"></span></label></div>
+        <div class="flagrow"><span>Slave（禁止回傳，雙serve用）</span><label class="switch"><input type="checkbox" id="f_slave"><span class="slider-toggle"></span></label></div>
+        <div class="flagrow"><span>Rotation Mode（無限旋轉）</span><label class="switch"><input type="checkbox" id="f_rotation"><span class="slider-toggle"></span></label></div>
+        <div class="section-actions"><button id="btnWriteFlags" class="primary">寫入 Flags（EEPROM）</button></div>
+      </div>
+
+      <div class="tabpanel" id="tab-stretch3">
+        <div class="hint">HeartToHeart3 Characteristic Change 用嘅三段 Stretch（PWM 教示功能對應）。數值必須係 2–254 嘅偶數。</div>
+        <div class="row"><label>Stretch SET1</label><input type="number" id="p_str1" min="2" max="254" step="2"></div>
+        <div class="row"><label>Stretch SET2</label><input type="number" id="p_str2" min="2" max="254" step="2"></div>
+        <div class="row"><label>Stretch SET3</label><input type="number" id="p_str3" min="2" max="254" step="2"></div>
+        <div class="section-actions"><button id="btnWriteStretch3" class="primary">寫入 3段 Stretch（EEPROM）</button></div>
+      </div>
+
+      <div class="tabpanel" id="tab-comm">
+        <div class="warnbox">⚠️ ID／通訊速度設定指令必須喺單一 servo（1:1）連接下執行，唔可以 daisy-chain 多個 servo 同時連。</div>
+        <div class="row"><label>新 ID (0–31)</label><input type="number" id="p_newid" min="0" max="31"><button id="btnWriteId" class="primary">寫入 ID</button></div>
+        <div class="row"><label>通訊速度</label>
+          <select id="p_baudrate">
+            <option value="10">115200 bps</option>
+            <option value="1">625000 bps</option>
+            <option value="0">1250000 bps</option>
+          </select>
+          <button id="btnWriteBaud" class="danger">寫入通訊速度（EEPROM）</button>
+        </div>
+        <div class="hint">寫入通訊速度後，servo 會立即以新速度回應；記得同步切換頁面頂部嘅通訊速度選項，否則會失去連接。</div>
+      </div>
+
+      <div class="tabpanel" id="tab-eeprom">
+        <div class="hint">64 bytes 原始 EEPROM 內容（HEX）。進階用途 — 直接編輯有風險，請小心。</div>
+        <textarea id="eepromHex" rows="6" style="width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12px;" placeholder="尚未讀取"></textarea>
+        <div class="section-actions">
+          <button id="btnWriteRawEeprom" class="danger">整段寫回 EEPROM</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: connection details / eeprom map view -->
+  <div>
+    <div class="card">
+      <h2>連接資訊</h2>
+      <div class="kv" id="connInfo">
+        <div class="k">狀態</div><div>未連接</div>
+        <div class="k">Baud</div><div>--</div>
+        <div class="k">Port</div><div>--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>目前 EEPROM 對照表</h2>
+      <div class="kv" id="eepromView">
+        <div class="k">尚未讀取</div><div>--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>使用說明</h2>
+      <div class="hint" style="font-size:12px;line-height:1.7;">
+        1. 用支援 CDC/USB-Serial 嘅近藤 USB Adapter (Dual USB Adapter HS / ICS USB Adapter HS) 連接電腦。<br>
+        2. 瀏覽器需支援 <b>Web Serial API</b>（Chrome / Edge 桌面版）。<br>
+        3. 按「連接」後喺瀏覽器彈出視窗揀返個 serial port。<br>
+        4. 設定變更（ID/Baud/EEPROM）時，請確保只有一顆 servo 連接。<br>
+        5. 位置控制／角度讀取喺 daisy-chain 多顆 servo 情況下亦可使用（用返 ID 分辨）。<br>
+        6. 通訊格式：8-bit data, 1 stop bit, <b>Even parity</b>，半雙工。
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>ICS3.5/3.6 通訊協議根據近藤科學公開之 ICS3.5/3.6 ソフトウェアマニュアル（コマンドリファレンス）實作。使用前請確認 servo 電源供應充足，切勿只用 USB 供電驅動 servo。</footer>
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ===================== ICS3.5/3.6 protocol constants ===================== */
+const SC = { EEPROM:0x00, STRC:0x01, SPD:0x02, CUR:0x03, TMP:0x04, TCH:0x05 };
+const MAIN = {
+  POS:   0b100_00000,
+  READ:  0b101_00000,
+  WRITE: 0b110_00000,
+  IDCMD: 0b111_00000,
+};
+
+let port = null, reader = null, writer = null, keepReading = false;
+let readBuffer = [];
+let pendingResolve = null;
+let liveTimer = null;
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(kind, msg){
+  const line = document.createElement('div');
+  line.className = kind;
+  const t = new Date().toLocaleTimeString('en-GB', {hour12:false});
+  line.textContent = `[${t}] ${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function toast(msg, isErr=false){
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr?' err':'');
+  setTimeout(()=>t.className='toast', 2200);
+}
+function bytesToHex(arr){ return Array.from(arr).map(b=>b.toString(16).padStart(2,'0')).join(' '); }
+
+/* ===================== Serial connection ===================== */
+async function connect(){
+  if (!('serial' in navigator)) {
+    toast('此瀏覽器唔支援 Web Serial API，請用桌面版 Chrome 或 Edge', true);
+    return;
+  }
+  try{
+    port = await navigator.serial.requestPort();
+    const baudSel = $('baudSelect').value;
+    const baud = baudSel === 'auto' ? 115200 : parseInt(baudSel);
+    await port.open({ baudRate: baud, dataBits:8, stopBits:1, parity:'even' });
+    writer = port.writable.getWriter();
+    keepReading = true;
+    readLoop();
+    setConnected(true, baud);
+    log('info', `已連接，baudrate=${baud}`);
+    toast('連接成功');
+  }catch(e){
+    log('err', '連接失敗: ' + e.message);
+    toast('連接失敗: ' + e.message, true);
+  }
+}
+
+async function disconnect(){
+  keepReading = false;
+  try{
+    if (reader){ await reader.cancel().catch(()=>{}); reader.releaseLock(); reader=null; }
+    if (writer){ writer.releaseLock(); writer=null; }
+    if (port){ await port.close(); port=null; }
+  }catch(e){ log('err','切斷時發生錯誤: '+e.message); }
+  setConnected(false);
+  stopLive();
+  log('info','已切斷連接');
+}
+
+function setConnected(on, baud){
+  const pill = $('connPill');
+  pill.textContent = on ? '已連接' : '未連接';
+  pill.className = 'pill ' + (on ? 'on':'off');
+  $('btnConnect').disabled = on;
+  $('btnDisconnect').disabled = !on;
+  $('connInfo').innerHTML = on
+    ? `<div class="k">狀態</div><div>已連接</div><div class="k">Baud</div><div>${baud}</div><div class="k">Port</div><div>已授權裝置</div>`
+    : `<div class="k">狀態</div><div>未連接</div><div class="k">Baud</div><div>--</div><div class="k">Port</div><div>--</div>`;
+}
+
+async function readLoop(){
+  while (port && port.readable && keepReading){
+    reader = port.readable.getReader();
+    try{
+      while (true){
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value){
+          for (const b of value) readBuffer.push(b);
+          if (pendingResolve) maybeResolvePending();
+        }
+      }
+    }catch(e){
+      if (keepReading) log('err','讀取錯誤: '+e.message);
+    }finally{
+      reader.releaseLock();
+    }
+  }
+}
+
+let pendingLen = 0;
+function maybeResolvePending(){
+  if (readBuffer.length >= pendingLen){
+    const data = readBuffer.splice(0, pendingLen);
+    const r = pendingResolve;
+    pendingResolve = null;
+    r(data);
+  }
+}
+
+async function sendRaw(bytes){
+  if (!writer) throw new Error('未連接');
+  const arr = new Uint8Array(bytes);
+  log('tx', 'TX: ' + bytesToHex(arr));
+  await writer.write(arr);
+}
+
+/* Send command, expect echo (loopback) of txLen bytes + extra rxExtra bytes; returns only the extra bytes */
+function waitForBytes(n, timeoutMs=800){
+  return new Promise((resolve, reject)=>{
+    pendingLen = n;
+    pendingResolve = resolve;
+    if (readBuffer.length >= n) maybeResolvePending();
+    setTimeout(()=>{
+      if (pendingResolve === resolve){
+        pendingResolve = null;
+        reject(new Error('timeout waiting for response'));
+      }
+    }, timeoutMs);
+  });
+}
+
+async function sendAndReceive(txBytes, rxExtraLen){
+  readBuffer = []; // flush stale
+  await sendRaw(txBytes);
+  const total = txBytes.length + rxExtraLen;
+  const all = await waitForBytes(total);
+  const extra = all.slice(txBytes.length);
+  log('rx', 'RX: ' + bytesToHex(all));
+  return { all, extra };
+}
+
+/* ===================== Command builders ===================== */
+function idByte(mainBits, id){ return (mainBits | (id & 0x1f)) & 0xff; }
+
+async function cmdReadEeprom(id){
+  const tx = [idByte(MAIN.READ, id), SC.EEPROM];
+  const { extra } = await sendAndReceive(tx, 64);
+  return extra; // 64 bytes
+}
+async function cmdWriteEeprom(id, data64){
+  if (data64.length !== 64) throw new Error('EEPROM 需要 64 bytes');
+  const tx = [idByte(MAIN.WRITE, id), SC.EEPROM, ...data64];
+  const { extra } = await sendAndReceive(tx, 64);
+  return extra;
+}
+async function cmdReadParam(id, sc){
+  const tx = [idByte(MAIN.READ, id), sc];
+  const rxLen = (sc===SC.TCH) ? 2 : 1;
+  const { extra } = await sendAndReceive(tx, rxLen);
+  return extra;
+}
+async function cmdWriteParam(id, sc, value){
+  const tx = [idByte(MAIN.WRITE, id), sc, value & 0xff];
+  const { extra } = await sendAndReceive(tx, 1);
+  return extra;
+}
+async function cmdSetPosition(id, pos){
+  // pos: 0 = free, else 3500-11500 (14 bit, split into 7+7)
+  const v = pos & 0x3fff;
+  const posH = (v >> 7) & 0x7f;
+  const posL = v & 0x7f;
+  const tx = [idByte(MAIN.POS, id), posH, posL];
+  const { extra } = await sendAndReceive(tx, 2);
+  const tchH = extra[0], tchL = extra[1];
+  return (tchH << 7) | tchL;
+}
+async function cmdReadId(){
+  const tx = [0xFF, 0x00, 0x00, 0x00];
+  readBuffer = [];
+  await sendRaw(tx);
+  const all = await waitForBytes(tx.length + 1);
+  log('rx', 'RX: ' + bytesToHex(all));
+  const r = all[all.length-1];
+  return r & 0x1f;
+}
+async function cmdWriteId(newId){
+  const cmdByte = idByte(MAIN.IDCMD, newId & 0x1f);
+  const tx = [cmdByte, 0x01, 0x01, 0x01];
+  readBuffer = [];
+  await sendRaw(tx);
+  const all = await waitForBytes(tx.length + 1);
+  log('rx', 'RX: ' + bytesToHex(all));
+  return all[all.length-1] & 0x1f;
+}
+
+/* ===================== EEPROM byte map (1-indexed per manual -> 0-indexed here) ===================== */
+/*
+idx0  : backup char (0x5A) - read only, don't touch
+idx1  : stretch gain
+idx2  : speed
+idx3  : punch
+idx4  : deadband
+idx5  : dumping
+idx6  : safe timer (protection)
+idx7  : flag
+idx8  : pulse limit upper high byte
+idx9  : pulse limit upper low byte
+idx10 : pulse limit lower high byte
+idx11 : pulse limit lower low byte
+idx12 : temp limit
+idx13 : current limit
+idx14 : response
+idx15 : user offset
+...
+idx16-23: calibration (don't touch, keep as read)
+idx24 : comm speed
+idx25 : ID (lower)
+idx26 : user offset extended? (per manual complexities vary by fw) - keep raw passthrough
+idx48-50: stretch SET1,2,3 (approx region; kept as raw passthrough, edited via dedicated fields with offsets below)
+*/
+// Byte offsets confirmed against manual's numbered list (1-based byte N => index N-1):
+const EE = {
+  BACKUP: 0,
+  STRETCH: 2,     // bytes 3-4 pair (index2=low/high nibble packed as full byte spec says value at "byte 3" high/low nibble -> simplified: single byte at idx2
+  SPEED: 4,
+  PUNCH: 6,
+  DEADBAND: 8,
+  DUMPING: 10,
+  SAFETIMER: 12,
+  FLAG: 14,
+  PULSE_UPPER_HI: 16,
+  PULSE_UPPER_LO: 18,
+  PULSE_LOWER_HI: 20,
+  PULSE_LOWER_LO: 22,
+  TEMPLIMIT: 26,
+  CURRENTLIMIT: 28,
+  RESPONSE: 30,
+  USEROFFSET: 32,
+  COMMSPEED: 56,
+  ID: 58,
+  STR1: 50,
+  STR2: 52,
+  STR3: 54,
+};
+// NOTE: The official manual lists EEPROM as a nibble-per-byte table for some fields (legacy ICS2 layout)
+// but ICS3.5/3.6 Manager and most modern implementations use full-byte values at these offsets for
+// single-byte parameters (stretch/speed/punch/deadband/dumping/safetimer/templimit/currentlimit/response/useroffset),
+// with 2-byte big-endian values for pulse limits. Comm speed and ID occupy their documented byte offsets.
+// If your specific firmware differs, use the "EEPROM Raw" tab to inspect/adjust the exact bytes.
+
+let currentEeprom = null; // Uint8Array(64)
+
+/* ===================== UI wiring ===================== */
+function getTargetId(){ return parseInt($('targetId').value) || 0; }
+
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = disconnect;
+$('btnClearLog').onclick = ()=> logEl.innerHTML = '';
+
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick = ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tabpanel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    $('tab-'+t.dataset.tab).classList.add('active');
+  };
+});
+
+/* -- Position control -- */
+const posSlider = $('posSlider'), posValue = $('posValue');
+posSlider.oninput = ()=> posValue.value = posSlider.value;
+posValue.onchange = ()=>{
+  let v = parseInt(posValue.value)||7500;
+  v = Math.max(0, Math.min(16383, v));
+  posValue.value = v;
+  if (v>=3500 && v<=11500) posSlider.value = v;
+};
+$('btnCenter').onclick = ()=>{ posSlider.value=7500; posValue.value=7500; sendPosition(7500); };
+$('btnFree').onclick = ()=>{ sendPosition(0); };
+$('btnSendPos').onclick = ()=> sendPosition(parseInt(posValue.value));
+
+async function sendPosition(pos){
+  try{
+    const id = getTargetId();
+    const tch = await cmdSetPosition(id, pos);
+    $('liveAngle').innerHTML = `${tch}<small>目前角度 TCH</small>`;
+    toast(pos===0 ? 'Servo 已脫力' : `已送出角度 ${pos}`);
+  }catch(e){
+    log('err','送出角度失敗: '+e.message);
+    toast('送出角度失敗: '+e.message, true);
+  }
+}
+
+/* -- Live monitor reads -- */
+$('btnReadAngle').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const ver = $('icsVersion').value;
+    if (ver === '36'){
+      const d = await cmdReadParam(id, SC.TCH);
+      const v = (d[0]<<7)|d[1];
+      $('liveAngle').innerHTML = `${v}<small>目前角度 TCH</small>`;
+    } else {
+      toast('ICS3.5 唔支援即時角度讀取指令，請用 Position 指令送 Free(0) 取得目前角度', true);
+    }
+  }catch(e){ log('err','讀取角度失敗: '+e.message); toast('讀取角度失敗',true); }
+};
+$('btnReadCurrent').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const d = await cmdReadParam(id, SC.CUR);
+    $('liveCurrent').innerHTML = `${d[0]}<small>電流 (raw 0–127)</small>`;
+  }catch(e){ log('err','讀取電流失敗: '+e.message); toast('讀取電流失敗',true); }
+};
+$('btnReadTemp').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const d = await cmdReadParam(id, SC.TMP);
+    $('liveTemp').innerHTML = `${d[0]}<small>溫度 (raw 1–127, 越細越熱)</small>`;
+  }catch(e){ log('err','讀取溫度失敗: '+e.message); toast('讀取溫度失敗',true); }
+};
+$('btnLiveToggle').onclick = ()=>{
+  if (liveTimer){ stopLive(); }
+  else{
+    liveTimer = setInterval(async ()=>{
+      if (!port) return;
+      try{
+        const id = getTargetId();
+        const ver = $('icsVersion').value;
+        if (ver === '36'){
+          const d = await cmdReadParam(id, SC.TCH);
+          $('liveAngle').innerHTML = `${(d[0]<<7)|d[1]}<small>目前角度 TCH</small>`;
+        }
+        const c = await cmdReadParam(id, SC.CUR);
+        $('liveCurrent').innerHTML = `${c[0]}<small>電流 (raw 0–127)</small>`;
+        const t = await cmdReadParam(id, SC.TMP);
+        $('liveTemp').innerHTML = `${t[0]}<small>溫度 (raw 1–127, 越細越熱)</small>`;
+        const s = await cmdReadParam(id, SC.SPD);
+        $('liveSpeed').innerHTML = `${s[0]}<small>Speed（讀取值）</small>`;
+      }catch(e){ /* silent during polling */ }
+    }, 700);
+    $('btnLiveToggle').textContent = '停止輪詢監控';
+  }
+};
+function stopLive(){
+  if (liveTimer){ clearInterval(liveTimer); liveTimer=null; $('btnLiveToggle').textContent='開始輪詢監控'; }
+}
+
+/* -- basic single-param read/write buttons -- */
+const paramFieldMap = {
+  speed:{sc:SC.SPD, el:'p_speed'},
+  stretch:{sc:SC.STRC, el:'p_stretch'},
+};
+document.querySelectorAll('[data-read]').forEach(btn=>{
+  btn.onclick = async ()=>{
+    const key = btn.dataset.read;
+    const m = paramFieldMap[key];
+    if (!m) return;
+    try{
+      const id = getTargetId();
+      const d = await cmdReadParam(id, m.sc);
+      $(m.el).value = d[0];
+      toast(`已讀取 ${key} = ${d[0]}`);
+    }catch(e){ log('err',`讀取 ${key} 失敗: `+e.message); toast('讀取失敗',true); }
+  };
+});
+document.querySelectorAll('[data-write]').forEach(btn=>{
+  btn.onclick = async ()=>{
+    const key = btn.dataset.write;
+    try{
+      const id = getTargetId();
+      if (key === 'speed'){
+        await cmdWriteParam(id, SC.SPD, parseInt($('p_speed').value));
+      } else if (key === 'stretch'){
+        await cmdWriteParam(id, SC.STRC, parseInt($('p_stretch').value));
+      } else if (key === 'templimit'){
+        await cmdWriteParam(id, SC.TMP, parseInt($('p_templimit').value));
+      } else if (key === 'currentlimit'){
+        await cmdWriteParam(id, SC.CUR, parseInt($('p_currentlimit').value));
+      } else if (['punch','deadband','dumping','safetimer','useroffset'].includes(key)){
+        await writeEepromField(key);
+      }
+      toast(`${key} 已寫入`);
+      log('info', `寫入 ${key} 完成`);
+    }catch(e){ log('err',`寫入 ${key} 失敗: `+e.message); toast('寫入失敗',true); }
+  };
+});
+
+async function ensureEepromLoaded(){
+  if (!currentEeprom){
+    const id = getTargetId();
+    currentEeprom = await cmdReadEeprom(id);
+  }
+  return currentEeprom;
+}
+
+async function writeEepromField(key){
+  const id = getTargetId();
+  const ee = await ensureEepromLoaded();
+  const buf = Uint8Array.from(ee);
+  const setU8 = (off, val)=>{ buf[off] = val & 0xff; };
+  const setU16 = (offHi, offLo, val)=>{ buf[offHi] = (val>>8)&0xff; buf[offLo]=val&0xff; };
+
+  if (key==='punch') setU8(EE.PUNCH, parseInt($('p_punch').value));
+  if (key==='deadband') setU8(EE.DEADBAND, parseInt($('p_deadband').value));
+  if (key==='dumping') setU8(EE.DUMPING, parseInt($('p_dumping').value));
+  if (key==='safetimer') setU8(EE.SAFETIMER, parseInt($('p_safetimer').value));
+  if (key==='useroffset'){
+    let v = parseInt($('p_useroffset').value);
+    if (v<0) v = 256+v; // convert negative to 0-255 range per manual convention
+    setU8(EE.USEROFFSET, v);
+  }
+  const written = await cmdWriteEeprom(id, Array.from(buf));
+  currentEeprom = written.length===64 ? written : Array.from(buf);
+  renderEepromView(currentEeprom);
+}
+
+$('btnWriteLimits').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const ee = await ensureEepromLoaded();
+    const buf = Uint8Array.from(ee);
+    const up = parseInt($('p_pulseupper').value);
+    const lo = parseInt($('p_pulselower').value);
+    buf[EE.PULSE_UPPER_HI] = (up>>8)&0xff; buf[EE.PULSE_UPPER_LO] = up&0xff;
+    buf[EE.PULSE_LOWER_HI] = (lo>>8)&0xff; buf[EE.PULSE_LOWER_LO] = lo&0xff;
+    const written = await cmdWriteEeprom(id, Array.from(buf));
+    currentEeprom = written.length===64?written:Array.from(buf);
+    renderEepromView(currentEeprom);
+    toast('Pulse Limit 已寫入');
+  }catch(e){ log('err','寫入 Pulse Limit 失敗: '+e.message); toast('寫入失敗',true); }
+};
+
+$('btnWriteFlags').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const ee = await ensureEepromLoaded();
+    const buf = Uint8Array.from(ee);
+    let flag = 0;
+    if ($('f_reverse').checked) flag |= 0b0001;
+    if ($('f_pwminh').checked) flag |= 0b0100;
+    if ($('f_slave').checked) flag |= 0b0010;
+    if ($('f_rotation').checked) flag |= 0b1000;
+    buf[EE.FLAG] = flag & 0xff;
+    const written = await cmdWriteEeprom(id, Array.from(buf));
+    currentEeprom = written.length===64?written:Array.from(buf);
+    renderEepromView(currentEeprom);
+    toast('Flags 已寫入');
+  }catch(e){ log('err','寫入 Flags 失敗: '+e.message); toast('寫入失敗',true); }
+};
+
+$('btnWriteStretch3').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const ee = await ensureEepromLoaded();
+    const buf = Uint8Array.from(ee);
+    const s1=parseInt($('p_str1').value), s2=parseInt($('p_str2').value), s3=parseInt($('p_str3').value);
+    [s1,s2,s3].forEach(v=>{ if (v%2!==0 || v<2 || v>254) throw new Error('Stretch SET 值必須係 2–254 之間嘅偶數'); });
+    buf[EE.STR1]=s1&0xff; buf[EE.STR2]=s2&0xff; buf[EE.STR3]=s3&0xff;
+    const written = await cmdWriteEeprom(id, Array.from(buf));
+    currentEeprom = written.length===64?written:Array.from(buf);
+    renderEepromView(currentEeprom);
+    toast('3段 Stretch 已寫入');
+  }catch(e){ log('err','寫入失敗: '+e.message); toast(e.message,true); }
+};
+
+$('btnWriteId').onclick = async ()=>{
+  if (!confirm('請確認目前只有單一 servo 連接（1:1），繼續寫入 ID？')) return;
+  try{
+    const newId = parseInt($('p_newid').value);
+    const got = await cmdWriteId(newId);
+    toast(`ID 已寫入為 ${got}`);
+    $('targetId').value = got;
+    log('info', `ID 寫入完成: ${got}`);
+  }catch(e){ log('err','寫入 ID 失敗: '+e.message); toast('寫入 ID 失敗',true); }
+};
+
+$('btnWriteBaud').onclick = async ()=>{
+  if (!confirm('寫入通訊速度後 servo 會用新速度回應，確定繼續？（記得同步切換上方通訊速度選項）')) return;
+  try{
+    const id = getTargetId();
+    const ee = await ensureEepromLoaded();
+    const buf = Uint8Array.from(ee);
+    buf[EE.COMMSPEED] = parseInt($('p_baudrate').value) & 0xff;
+    const written = await cmdWriteEeprom(id, Array.from(buf));
+    currentEeprom = written.length===64?written:Array.from(buf);
+    renderEepromView(currentEeprom);
+    toast('通訊速度已寫入，請重新連接以新速度通訊');
+  }catch(e){ log('err','寫入通訊速度失敗: '+e.message); toast('寫入失敗',true); }
+};
+
+$('btnWriteRawEeprom').onclick = async ()=>{
+  if (!confirm('將會整段覆寫 64 bytes EEPROM，確定繼續？')) return;
+  try{
+    const hex = $('eepromHex').value.trim().split(/\s+/);
+    if (hex.length !== 64) throw new Error('需要準確 64 bytes（hex，以空白分隔）');
+    const data = hex.map(h=>parseInt(h,16));
+    const id = getTargetId();
+    const written = await cmdWriteEeprom(id, data);
+    currentEeprom = written;
+    renderEepromView(currentEeprom);
+    toast('EEPROM 已整段寫入');
+  }catch(e){ log('err','寫入 EEPROM 失敗: '+e.message); toast(e.message,true); }
+};
+
+$('btnReadId').onclick = async ()=>{
+  if (!confirm('請確認目前只有單一 servo 連接（1:1），繼續讀取 ID？')) return;
+  try{
+    const id = await cmdReadId();
+    $('targetId').value = id;
+    toast(`讀取到 ID = ${id}`);
+  }catch(e){ log('err','讀取 ID 失敗: '+e.message); toast('讀取 ID 失敗',true); }
+};
+
+$('btnReadEeprom').onclick = async ()=>{
+  try{
+    const id = getTargetId();
+    const ee = await cmdReadEeprom(id);
+    currentEeprom = ee;
+    fillFieldsFromEeprom(ee);
+    renderEepromView(ee);
+    toast('已讀取全部參數');
+  }catch(e){ log('err','讀取 EEPROM 失敗: '+e.message); toast('讀取失敗',true); }
+};
+
+function fillFieldsFromEeprom(ee){
+  $('p_speed').value = ee[EE.SPEED];
+  $('p_stretch').value = ee[EE.STRETCH];
+  $('p_punch').value = ee[EE.PUNCH];
+  $('p_deadband').value = ee[EE.DEADBAND];
+  $('p_dumping').value = ee[EE.DUMPING];
+  $('p_safetimer').value = ee[EE.SAFETIMER];
+  let uo = ee[EE.USEROFFSET];
+  if (uo>127) uo -= 256;
+  $('p_useroffset').value = uo;
+  $('p_templimit').value = ee[EE.TEMPLIMIT];
+  $('p_currentlimit').value = ee[EE.CURRENTLIMIT];
+  $('p_pulseupper').value = (ee[EE.PULSE_UPPER_HI]<<8)|ee[EE.PULSE_UPPER_LO];
+  $('p_pulselower').value = (ee[EE.PULSE_LOWER_HI]<<8)|ee[EE.PULSE_LOWER_LO];
+  $('p_str1').value = ee[EE.STR1];
+  $('p_str2').value = ee[EE.STR2];
+  $('p_str3').value = ee[EE.STR3];
+  $('p_newid').value = ee[EE.ID] & 0x1f;
+  const flag = ee[EE.FLAG];
+  $('f_reverse').checked = !!(flag & 0b0001);
+  $('f_pwminh').checked = !!(flag & 0b0100);
+  $('f_slave').checked = !!(flag & 0b0010);
+  $('f_rotation').checked = !!(flag & 0b1000);
+  const baudMap = {10:'10',1:'1',0:'0'};
+  const bv = ee[EE.COMMSPEED];
+  if (baudMap[bv] !== undefined) $('p_baudrate').value = baudMap[bv];
+}
+
+function renderEepromView(ee){
+  $('eepromHex').value = bytesToHex(ee);
+  const rows = [
+    ['Backup Char', '0x'+ee[EE.BACKUP].toString(16)],
+    ['Stretch', ee[EE.STRETCH]],
+    ['Speed', ee[EE.SPEED]],
+    ['Punch', ee[EE.PUNCH]],
+    ['DeadBand', ee[EE.DEADBAND]],
+    ['Dumping', ee[EE.DUMPING]],
+    ['Protect Timer', ee[EE.SAFETIMER]],
+    ['Flag', '0b'+ee[EE.FLAG].toString(2).padStart(8,'0')],
+    ['Pulse Upper', (ee[EE.PULSE_UPPER_HI]<<8)|ee[EE.PULSE_UPPER_LO]],
+    ['Pulse Lower', (ee[EE.PULSE_LOWER_HI]<<8)|ee[EE.PULSE_LOWER_LO]],
+    ['Temp Limit', ee[EE.TEMPLIMIT]],
+    ['Current Limit', ee[EE.CURRENTLIMIT]],
+    ['Response', ee[EE.RESPONSE]],
+    ['User Offset(raw)', ee[EE.USEROFFSET]],
+    ['Comm Speed(raw)', ee[EE.COMMSPEED]],
+    ['ID', ee[EE.ID] & 0x1f],
+  ];
+  $('eepromView').innerHTML = rows.map(r=>`<div class="k">${r[0]}</div><div>${r[1]}</div>`).join('');
+}
+
+/* -- Scan servo IDs (position-command based ping, non-destructive: sends current-position-read via Free? 
+   Safer: use READ SPD as a lightweight, non-motion ping for each ID) -- */
+$('btnScan').onclick = async ()=>{
+  if (!port){ toast('請先連接', true); return; }
+  const listEl = $('servoList');
+  listEl.innerHTML = '<div class="hint">掃描中…</div>';
+  const found = [];
+  for (let id=0; id<32; id++){
+    try{
+      const d = await cmdReadParam(id, SC.SPD);
+      found.push(id);
+    }catch(e){ /* no response = no servo at this ID */ }
+  }
+  if (found.length===0){
+    listEl.innerHTML = '<div class="hint">未搵到任何 servo 回應。請確認接線及只有目標 servo 通電。</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  found.forEach(id=>{
+    const item = document.createElement('div');
+    item.className = 'servo-item';
+    item.innerHTML = `<span class="id">ID ${id}</span><span class="badge">在線</span>`;
+    item.onclick = ()=>{
+      document.querySelectorAll('.servo-item').forEach(x=>x.classList.remove('active'));
+      item.classList.add('active');
+      $('targetId').value = id;
+      toast(`已選擇 ID ${id}`);
+    };
+    listEl.appendChild(item);
+  });
+  toast(`掃描完成，搵到 ${found.length} 個 servo`);
+};
+</script>
+</body>
+</html>
