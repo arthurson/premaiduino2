@@ -573,8 +573,14 @@ void pmaReceiveUpdate() {
           inputBuffer += '\n';
           processCommand(inputBuffer);
           inputBuffer = "";
+        } else if (b == '\r') {
+          // \r 淨係斷行用，唔加入 inputBuffer（同 processCommand()
+          // 入面自己 trim() 嘅行為一致，避免打印/比較指令字串時
+          // 帶住尾隨嘅 \r）。純 \r（冇內容）都直接消耗掉，唔觸發
+          // processCommand()，等後面嘅 \n（如果係 \r\n 風格）先觸發。
+          Serial1.read();
         }
-        return;  // 唔係 '\n'：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
+        return;  // 其餘情況：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
       }
       uint8_t peekLen = b;
       // peek 唔到第二個 byte，要 read 咗第一個先，用 index 0 存住

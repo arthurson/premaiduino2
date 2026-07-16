@@ -977,23 +977,22 @@ void setup() {
 }
 // ===== loop() =====
 void loop() {
-  // ===== Serial1 指令讀取（非阻塞，逐 byte 砌 inputBuffer）=====
-  // 之前呢段完全缺失，導致 Serial Monitor 打任何指令都冇反應——
-  // processCommand() 同 inputBuffer 之前得個宣告，冇嘢會 call 佢。
-  // 遇到 \n 或 \r 就當一行完整，trim 咗喺 processCommand() 入面做，
-  // 呢度淨係負責砌字同判斷斷行。空行（純 \r\n 造成嘅多餘一次
-  // 觸發）直接跳過，唔會誤 call processCommand("")。
-  while (Serial1.available() > 0) {
-    char c = (char)Serial1.read();
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-      }
-    } else {
-      inputBuffer += c;
-    }
-  }
+  // 注意：舊版呢度曾經有一段獨立嘅 ASCII reader
+  // ("while (Serial1.available() > 0) { char c = Serial1.read(); ... }")，
+  // 用 while 一路清晒成個 Serial1 buffer 先為止。
+  //
+  // 呢段已經刪除——佢同 pmaReceiveUpdate() 爭緊同一個 Serial1 buffer，
+  // 而且完全唔識別 binary 封包，會將任何冇 '\n' 結尾嘅 byte 序列
+  // （包括所有 0x18 binary 封包）逐個當 ASCII 字元塞入 inputBuffer，
+  // 永遠等唔到 '\n'，令 processCommand() 同 pmaReceiveUpdate() 都
+  // 冧唔到呢啲 byte——呢個就係「binary 封包完全冇反應、連 ACK 都冇，
+  // 但 ASCII 指令 (STOP/HOME/FREE ALL) 正常」呢個徵狀嘅根本原因：
+  // ASCII 指令啱啱好用 '\n' 結尾，會被舊 reader 正確處理完；binary
+  // 封包冇 '\n'，會被吞晒但永遠唔會觸發 processCommand()。
+  //
+  // pmaReceiveUpdate() (PmaProtocol.h) 已經完整處理埋呢兩種情況
+  // (peek 判斷 + ASCII 字元逐個 append 落 inputBuffer + 遇到 '\n'
+  // 就 call processCommand())，唔需要呢度再有一份獨立邏輯。
 
   checkVoltage();
   updateActivityLED();
