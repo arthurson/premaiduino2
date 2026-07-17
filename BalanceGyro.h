@@ -51,11 +51,11 @@ inline bool balanceEnabled = false;
 //    嘅 overshoot / 持續震盪（見舊 comment 提到嘅病徵：讀數持續
 //    單方向爬升，撞到 servo 角度上限）。
 struct BalanceGains {
-  float pitchKp = 0.6f;   // 前後傾 P：誤差角度 → 髖前後 + 踝前後（經 IK 反解）
+  float pitchKp = 0.5f;   // 前後傾 P：誤差角度 → 髖前後 + 踝前後（經 IK 反解）
   float pitchKi = 0.0f;   // 前後傾 I：預設 0，穩定後先慢慢加（建議由 0.01 開始試）
   float pitchKd = 0.0f;   // 前後傾 D：用 gyroZ 阻尼，預設 0，建議由 0.02~0.05 開始試
 
-  float rollKp = 0.4f;    // 左右傾 P：誤差角度 → 髖側擺 + 踝側擺（經 IK 反解）
+  float rollKp = 0.5f;    // 左右傾 P：誤差角度 → 髖側擺 + 踝側擺（經 IK 反解）
   float rollKi = 0.0f;    // 左右傾 I：預設 0
   float rollKd = 0.0f;    // 左右傾 D：用 gyroX 阻尼，預設 0
 

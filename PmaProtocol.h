@@ -170,6 +170,34 @@ static bool motionFlashProgramPage(uint8_t pageIndex, const uint8_t *data1024) {
   if (pageIndex >= MOTION_FLASH_PAGE_COUNT) return false;
   uint32_t pageAddr = motionFlashPageAddr(pageIndex);
 
+  // ⚠⚠⚠ 致命 bug 修正：Flash erase/program 期間必須關閉中斷！
+  //
+  // 已知事故：用 .pma 上傳功能之後，機械人熄機後開唔返機，一定要
+  // 重新燒錄 .ino 先返生——呢個係 STM32 Flash 損壞嘅典型徵狀。
+  //
+  // 根本原因：HAL_FLASHEx_Erase()/HAL_FLASH_Program() 執行緊嗰陣，
+  // STM32 嘅 Flash controller 會鎖死，CPU 冧可以由 Flash 讀取任何
+  // 指令 (包括中斷向量表同 ISR code 本身)。如果呢段時間之內有任何
+  // 中斷觸發 (最大嫌疑：Serial1/Serial2/Serial3 嘅 UART RX interrupt，
+  // 藍牙隨時會送嘢入嚟)，CPU 會嘗試跳去 interrupt handler 攞指令，
+  // 但 Flash 呢刻讀唔到，會導致 bus fault / hard fault，甚至令個
+  // erase/program operation 半途而廢，寫壞緊 Flash sector 本身
+  // (包括可能波及 bootloader 跳轉表或者主程式 code 所在嘅 sector，
+  // 視乎 STM32F103CB 實際 sector 對齊情況)，令個晶片「開唔到機」。
+  //
+  // 呢個 race condition 平時可能好少中招 (UART interrupt 啱啱好喺
+  // 呢幾百微秒窗口觸發嘅機率細)，但只要中招一次就係災難性、不可逆
+  // 嘅後果 (要重新燒錄先返生)，唔可以淨係靠「機率低」去接受呢個
+  // 風險，一定要用 __disable_irq()/__enable_irq() 包住成個
+  // erase+program 過程，確保呢段時間內CPU唔會被任何中斷打斷。
+  //
+  // 副作用：關閉中斷期間，UART RX 會停止接收 (硬件 FIFO 通常有
+  // 幾個 byte 緩衝，短時間關閉中斷不會丟失資料，但如果 erase+
+  // program 耗時過長 (STM32F1 page erase 通常 20ms 左右，1024 bytes
+  // program 通常額外幾ms)，對方持續送資料有機會溢出硬件FIFO。
+  // 呢個風險遠細過「Flash損壞要重新燒錄」，屬於可接受嘅取捨。
+  __disable_irq();
+
   HAL_FLASH_Unlock();
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_WRPERR | FLASH_FLAG_PGERR);
 
@@ -192,6 +220,7 @@ static bool motionFlashProgramPage(uint8_t pageIndex, const uint8_t *data1024) {
   }
 
   HAL_FLASH_Lock();
+  __enable_irq();
   return ok;
 }
 // =========================================================
@@ -573,14 +602,8 @@ void pmaReceiveUpdate() {
           inputBuffer += '\n';
           processCommand(inputBuffer);
           inputBuffer = "";
-        } else if (b == '\r') {
-          // \r 淨係斷行用，唔加入 inputBuffer（同 processCommand()
-          // 入面自己 trim() 嘅行為一致，避免打印/比較指令字串時
-          // 帶住尾隨嘅 \r）。純 \r（冇內容）都直接消耗掉，唔觸發
-          // processCommand()，等後面嘅 \n（如果係 \r\n 風格）先觸發。
-          Serial1.read();
         }
-        return;  // 其餘情況：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
+        return;  // 唔係 '\n'：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
       }
       uint8_t peekLen = b;
       // peek 唔到第二個 byte，要 read 咗第一個先，用 index 0 存住
