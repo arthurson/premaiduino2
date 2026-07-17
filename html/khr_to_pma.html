@@ -27,11 +27,33 @@
   h1 { font-size: 20px; margin: 0 0 4px; }
   h2 { font-size: 15px; margin: 0 0 10px; color: var(--dim); font-weight: 600; }
   .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
-  .grid {
+  .row1 {
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
     align-items: start;
+  }
+  .row2 {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    margin-top: 16px;
+  }
+  .row3 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+    margin-top: 16px;
+  }
+  .row4 {
+    margin-top: 16px;
+  }
+  @media (max-width: 900px) {
+    .row1 { grid-template-columns: 1fr; }
+    .row2 { grid-template-columns: 1fr; }
+    .row3 { grid-template-columns: 1fr; }
   }
   .panel {
     background: var(--panel);
@@ -125,22 +147,16 @@
   .servo-cell.clamped-warn { border-color: #b45309; background: #fef3c7; }
   #humanoidGrid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-    max-width: 460px;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-auto-rows: min-content;
+    gap: 6px 6px;
+    max-width: 640px;
     margin: 0 auto;
   }
   .humanoid-cell { font-size: 11px; }
   .humanoid-cell .servo-cell { text-align: center; padding: 6px 4px; height: 100%; }
-  .humanoid-cell.hc-head    { grid-column: 2 / 4; }
-  .humanoid-cell.hc-r1      { grid-column: 1; }
-  .humanoid-cell.hc-r2      { grid-column: 2; }
-  .humanoid-cell.hc-l1      { grid-column: 3; }
-  .humanoid-cell.hc-l2      { grid-column: 4; }
-  .humanoid-cell.hc-rleg    { grid-column: 1 / 3; }
-  .humanoid-cell.hc-lleg    { grid-column: 3 / 5; }
   /* colour groups, loosely matching HeartToHeart4 佈局配色 */
-  .grp-head .servo-cell { background: #fde2e2; border-color: #f3b4b4; }
+  .grp-head .servo-cell { background: #ece3f9; border-color: #c9b3ec; }
   .grp-rarm .servo-cell { background: #d9f4f6; border-color: #a7e2e6; }
   .grp-larm .servo-cell { background: #fde2e2; border-color: #f3b4b4; }
   .grp-rleg .servo-cell { background: #dcf5df; border-color: #b3e5ba; }
@@ -184,106 +200,124 @@
 <h1>KHR-3HV → PremaidAI 動作轉換器</h1>
 <div class="sub">讀取 HeartToHeart4 (.xml) 動作檔 → 用 21軸對照表轉做 PremaidAI <code>0x18</code> 封包 → Web Serial 直送藍牙 / USB-Serial</div>
 
-<div class="grid">
-  <!-- LEFT COLUMN -->
-  <div>
-    <div class="panel">
-      <h2>① 載入 KHR-3HV 動作檔</h2>
-      <div class="row">
-        <input type="file" id="fileInput" accept=".xml" multiple>
-      </div>
-      <div class="small" id="fileStatus">未載入任何檔案</div>
+<div class="row1">
+  <div class="panel">
+    <h2>① 載入 KHR-3HV 動作檔</h2>
+    <div class="row">
+      <input type="file" id="fileInput" accept=".xml" multiple>
     </div>
+    <div class="small" id="fileStatus">未載入任何檔案</div>
+  </div>
 
-    <div class="panel">
-      <h2>② 序列連接 (PremaidAI)</h2>
-      <div class="row">
-        <span class="status-dot" id="connDot"></span>
-        <span id="connLabel">未連接</span>
-      </div>
-      <div class="row">
-        <button id="btnConnect" class="primary">連接序列埠</button>
-        <button id="btnDisconnect" disabled>斷開</button>
-      </div>
-      <div class="row">
-        <label class="small">Baud</label>
-        <input type="number" id="baudRate" value="115200">
-      </div>
-      <div class="small hint">
-        PremaidAI 韌體用 115200 baud（RN42 藍牙 SPP 或 USB-Serial 轉接皆可）。<br>
-        Web Serial 需要 Chrome/Edge，且頁面需以 https 或 localhost 開啟。
-      </div>
+  <div class="panel">
+    <h2>② 序列連接 (PremaidAI)</h2>
+    <div class="row">
+      <span class="status-dot" id="connDot"></span>
+      <span id="connLabel">未連接</span>
     </div>
-
-    <div class="panel">
-      <h2>③ 發射設定</h2>
-      <div class="row">
-        <label class="small">預設 SPD (tick, 1tick≈15ms)</label>
-        <input type="number" id="defaultSpd" value="20" min="1" max="255">
-      </div>
-      <div class="row">
-        <label class="small">Pose 間隔 (ms)</label>
-        <input type="number" id="poseInterval" value="500" min="0">
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="skipUnchanged" checked> 跳過同上一幀完全一樣嘅 pose</label>
-      </div>
+    <div class="row">
+      <button id="btnConnect" class="primary">連接序列埠</button>
+      <button id="btnDisconnect" disabled>斷開</button>
     </div>
-
-    <div class="panel">
-      <h2>Log
-        <button id="btnLogClear" class="btn-mini" style="float:right;margin-left:6px;">🗑 Clear</button>
-        <button id="btnLogCopy" class="btn-mini" style="float:right;">📋 Copy</button>
-      </h2>
-      <div id="log"></div>
+    <div class="row">
+      <label class="small">Baud</label>
+      <input type="number" id="baudRate" value="115200">
+    </div>
+    <div class="small hint">
+      PremaidAI 韌體用 115200 baud（RN42 藍牙 SPP 或 USB-Serial 轉接皆可）。<br>
+      Web Serial 需要 Chrome/Edge，且頁面需以 https 或 localhost 開啟。
     </div>
   </div>
 
-  <!-- RIGHT COLUMN -->
-  <div>
-    <div class="panel">
-      <div class="flex-between">
-        <h2 style="margin:0;">動作序列 (依連接圖重建順序)</h2>
-        <span class="pill" id="poseCountPill">0 poses</span>
-      </div>
-      <div class="row" style="margin-bottom:8px;">
-        <button id="btnSendAll" class="primary" disabled>▶ Play All (逐個即時送)</button>
-        <button id="btnUploadPma" class="primary" disabled>💾 Upload &amp; Play (.pma Flash，順滑)</button>
-        <button id="btnStop" class="danger" disabled>■ Stop All</button>
-        <button id="btnSendHome" disabled>⌂ HOME</button>
-        <button id="btnFreeAll" class="danger" disabled>◇ FREE ALL</button>
-      </div>
-      <div class="small hint" style="margin-bottom:8px;">
-        「Play All」逐個即時送 0x18 封包，速度受 poseInterval 控制，容易因為 servo
-        未郁完就送下一個 target 而「跳格」。「Upload &amp; Play」改用 firmware
-        原有嘅 .pma Flash 播放器：一次過將全部 pose 燒錄落 STM32 Flash，再觸發
-        自動播放，firmware 自己跟 SPD tick 排程逐個執行，應該順滑好多。
-      </div>
-      <table>
-        <thead>
-          <tr><th>#</th><th>名稱</th><th>類型</th><th>異動 servo 數</th><th></th></tr>
-        </thead>
-        <tbody id="poseTableBody"></tbody>
-      </table>
+  <div class="panel">
+    <h2>③ 發射設定</h2>
+    <div class="row">
+      <label class="small">預設 SPD (tick, 1tick≈15ms)</label>
+      <input type="number" id="defaultSpd" value="20" min="1" max="255">
     </div>
+    <div class="row">
+      <label class="small">Pose 間隔 (ms)</label>
+      <input type="number" id="poseInterval" value="500" min="0">
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="skipUnchanged" checked> 跳過同上一幀完全一樣嘅 pose</label>
+    </div>
+    <div class="row">
+      <label class="small">KHR 每 frame 實際 ms</label>
+      <input type="number" id="khrFrameMs" value="20" min="1" max="1000">
+    </div>
+    <div class="small hint">
+      ⚠ KHR-3HV/RCB-4 嘅 speed byte 單位係「frame 數」，1 frame 嘅實際
+      ms 由 project 嘅 Option Byte（Config 前2個 byte）決定，可以係
+      10/15/20/25ms 其中一種，唔係固定值！同 PMA 韌體嘅「1 tick=15ms」
+      唔一定一致。<br>
+      本工具解碼過官方 Sample_Projecs(2.4)/22DOF_KHR3HV(V2.4).h4p，
+      實測 Config=[27,192] → option word 0xC01B → FRAME bits=01 →
+      <b>20ms/frame</b>（依 <a href="https://github.com/galatasarayuniversity/libkondo4/blob/master/rcb4.h" target="_blank" rel="noopener">libkondo4 rcb4.h</a>
+      嘅 bit 定義解讀），所以呢度預設 20，但如果你自己嘅 project 用
+      緊唔同 Config，請自行核對並改呢個數值。<br>
+      如果唔換算、直接將 KHR frame 數當做 PMA tick 數用，兩者時間單位
+      唔一致，會令 servo 未郁完下一個 pose 就到，出現「一格格」跳動
+      而唔係順滑動作——呢個換算就係用嚟解決呢個問題。
+    </div>
+  </div>
+</div>
 
-    <div class="panel">
-      <h2>目前選中 Pose 詳情</h2>
-      <div id="poseDetail" class="small hint">未選擇</div>
-      <div id="humanoidGrid" style="margin-top:10px;"></div>
+<div class="row2">
+  <div class="panel">
+    <div class="flex-between">
+      <h2 style="margin:0;">動作序列 (依連接圖重建順序)</h2>
+      <span class="pill" id="poseCountPill">0 poses</span>
     </div>
+    <div class="row" style="margin-bottom:8px;">
+      <button id="btnSendAll" class="primary" disabled>▶ Play All (逐個即時送)</button>
+      <button id="btnUploadPma" class="primary" disabled>💾 Upload &amp; Play (.pma Flash，順滑)</button>
+      <button id="btnStop" class="danger" disabled>■ Stop All</button>
+      <button id="btnSendHome" disabled>⌂ HOME</button>
+      <button id="btnFreeAll" class="danger" disabled>◇ FREE ALL</button>
+    </div>
+    <div class="small hint" style="margin-bottom:8px;">
+      「Play All」逐個即時送 0x18 封包，速度受 poseInterval 控制，容易因為 servo
+      未郁完就送下一個 target 而「跳格」。「Upload &amp; Play」改用 firmware
+      原有嘅 .pma Flash 播放器：一次過將全部 pose 燒錄落 STM32 Flash，再觸發
+      自動播放，firmware 自己跟 SPD tick 排程逐個執行，應該順滑好多。
+    </div>
+    <table>
+      <thead>
+        <tr><th>#</th><th>名稱</th><th>類型</th><th>異動 servo 數</th><th></th></tr>
+      </thead>
+      <tbody id="poseTableBody"></tbody>
+    </table>
+  </div>
 
-    <div class="panel">
-      <h2>對應嘅 0x18 封包 (hex)</h2>
-      <textarea id="packetHexOut" readonly></textarea>
-    </div>
+  <div class="panel">
+    <h2>目前選中 Pose 詳情</h2>
+    <div id="poseDetail" class="small hint">未選擇</div>
+    <div id="humanoidGrid" style="margin-top:10px;"></div>
+  </div>
+</div>
 
-    <div class="panel">
-      <h2>Play All 將會發射嘅全部 0x18 封包 (依序)
-        <button id="btnAllPacketsCopy" class="btn-mini" style="float:right;">📋 Copy</button>
-      </h2>
-      <textarea id="allPacketsOut" readonly style="height:200px;"></textarea>
-    </div>
+<div class="row3">
+  <div class="panel">
+    <h2>Play All 將會發射嘅全部 0x18 封包 (依序)
+      <button id="btnAllPacketsCopy" class="btn-mini" style="float:right;">📋 Copy</button>
+    </h2>
+    <textarea id="allPacketsOut" readonly style="height:200px;"></textarea>
+  </div>
+
+  <div class="panel">
+    <h2>對應嘅 0x18 封包 (hex)</h2>
+    <textarea id="packetHexOut" readonly></textarea>
+  </div>
+</div>
+
+<div class="row4">
+  <div class="panel">
+    <h2>Log
+      <button id="btnLogClear" class="btn-mini" style="float:right;margin-left:6px;">🗑 Clear</button>
+      <button id="btnLogCopy" class="btn-mini" style="float:right;">📋 Copy</button>
+    </h2>
+    <div id="log"></div>
   </div>
 </div>
 
@@ -332,22 +366,27 @@ const HUMANOID_LAYOUT = {
   leftLeg:  [4, 6, 8, 10, 12, 14],
 };
 
-// 參考 HeartToHeart4 嘅排位畫面重排：第一行頭部置中(擺喺原本髖轉向嗰行
-// 上面)，第二行4格(右肩擺/右臂轉 | 左臂轉/左肩擺)，跟住肩前後、肘各一行
-// 一對，最尾先到雙腿(髖轉→髖擺→髖前後→膝→踝前→踝擺)逐行成對排列。
-// 每個 cell: {bid, cls}；cls 決定格仔跨幾多欄同配色分組；null=留空。
+// 參考 HeartToHeart4 嘅實際排位畫面(頭置中企喺最上、肩4格一行、
+// 手臂向兩側企、雙腿夾住中間身軀嗰條隙)逐格重畫，用 8欄嘅網格、
+// 每格明確指定 {bid, col, span, grp}：col=起始欄(1-indexed)，
+// span=跨幾多欄，grp=配色分組 class。null=留空。
 const HUMANOID_GRID_ROWS = [
-  [ null,                             {bid:22, cls:'hc-head grp-head'}, null                               ],
-  [ {bid:24, cls:'hc-r1 grp-rarm'},   {bid:26, cls:'hc-r2 grp-rarm'},
-    {bid:27, cls:'hc-l1 grp-larm'},   {bid:25, cls:'hc-l2 grp-larm'}                                        ],
-  [ {bid:1,  cls:'hc-rleg grp-rarm'}, {bid:2,  cls:'hc-lleg grp-larm'}                                      ],
-  [ {bid:28, cls:'hc-rleg grp-rarm'}, {bid:29, cls:'hc-lleg grp-larm'}                                      ],
-  [ {bid:3,  cls:'hc-rleg grp-rleg'}, {bid:4,  cls:'hc-lleg grp-lleg'}                                      ],
-  [ {bid:5,  cls:'hc-rleg grp-rleg'}, {bid:6,  cls:'hc-lleg grp-lleg'}                                      ],
-  [ {bid:7,  cls:'hc-rleg grp-rleg'}, {bid:8,  cls:'hc-lleg grp-lleg'}                                      ],
-  [ {bid:9,  cls:'hc-rleg grp-rleg'}, {bid:10, cls:'hc-lleg grp-lleg'}                                      ],
-  [ {bid:11, cls:'hc-rleg grp-rleg'}, {bid:12, cls:'hc-lleg grp-lleg'}                                      ],
-  [ {bid:13, cls:'hc-rleg grp-rleg'}, {bid:14, cls:'hc-lleg grp-lleg'}                                      ],
+  // 頭：置中，坐正身軀上面
+  [ {bid:22, col:4, span:2, grp:'grp-head'} ],
+  // 第二行4格全跨：右肩擺、右臂轉 | 左臂轉、左肩擺 (由外到內)
+  [ {bid:24, col:1, span:2, grp:'grp-rarm'}, {bid:26, col:3, span:2, grp:'grp-rarm'},
+    {bid:27, col:5, span:2, grp:'grp-larm'}, {bid:25, col:7, span:2, grp:'grp-larm'} ],
+  // 肩前後：手臂繼續留喺外側，中間留返窿做身軀
+  [ {bid:1,  col:1, span:2, grp:'grp-rarm'}, {bid:2,  col:7, span:2, grp:'grp-larm'} ],
+  // 肘：跟返肩前後同一欄
+  [ {bid:28, col:1, span:2, grp:'grp-rarm'}, {bid:29, col:7, span:2, grp:'grp-larm'} ],
+  // 雙腿：企喺身軀兩側，中間留返窿 (跨下)
+  [ {bid:3,  col:3, span:2, grp:'grp-rleg'}, {bid:4,  col:5, span:2, grp:'grp-lleg'} ],
+  [ {bid:5,  col:3, span:2, grp:'grp-rleg'}, {bid:6,  col:5, span:2, grp:'grp-lleg'} ],
+  [ {bid:7,  col:3, span:2, grp:'grp-rleg'}, {bid:8,  col:5, span:2, grp:'grp-lleg'} ],
+  [ {bid:9,  col:3, span:2, grp:'grp-rleg'}, {bid:10, col:5, span:2, grp:'grp-lleg'} ],
+  [ {bid:11, col:3, span:2, grp:'grp-rleg'}, {bid:12, col:5, span:2, grp:'grp-lleg'} ],
+  [ {bid:13, col:3, span:2, grp:'grp-rleg'}, {bid:14, col:5, span:2, grp:'grp-lleg'} ],
 ];
 
 // binaryID -> pmaID (與 Pre-maiduino2.ino findServoByPmaId() 相反方向)
@@ -849,12 +888,60 @@ function buildSequence(acts, lines) {
 // ======================================================================
 
 // 每個 pose: { name, decoded, pmaTargets: {binaryID: pulse}, skippedChannels: [...] }
+// ======================================================================
+// ===== KHR frame → PMA tick 單位換算 (解決「一格格」問題) =====
+// ======================================================================
+// 背景：KHR-3HV/RCB-4 嘅 0x10 motion packet 入面 speed byte，單位係
+// 「frame 數」，1 frame 嘅實際 ms 由 project 嘅 2-byte option word
+// 決定 (10/15/20/25ms 其中一種，見 libkondo4 rcb4.h 嘅
+// RCB4_OPT_FRAME_* 定義)，唔係固定值。而 PMA 韌體 (PmaProtocol.h
+// motionPlaybackUpdate()) 嘅 0x18 SPD byte 單位固定係「1 tick=15ms」。
+//
+// 之前嘅寫法將 decoded.speed (KHR frame 數) 原封不動塞入 PMA 嘅 SPD
+// byte，兩者時間單位唔一致——如果 KHR project 用緊 20ms/frame
+// (已經實測解碼官方 Sample_Projecs(2.4)/22DOF_KHR3HV(V2.4).h4p 嘅
+// Config=[27,192] 確認)，PMA 韌體卻當每個 tick 淨係 15ms，會令
+// firmware 等待時間比原意短咗 25% (15/20=0.75)，servo 未郁完，下一
+// 個 pose 就送到，出現「一格格」硬跳而唔係順滑動作。
+//
+// 換算：pmaTick = round(khrFrames * khrFrameMs / PMA_TICK_MS)
+// khrFrameMs 由 UI 輸入框 #khrFrameMs 提供 (預設20，可自行覆寫，
+// 因為唔同 project 嘅 Config 可能唔同)。
+const PMA_TICK_MS = 15; // PmaProtocol.h motionPlaybackUpdate(): 1 tick = 15ms，韌體常數，唔應該喺呢度改
+
+function getKhrFrameMs() {
+  const el = document.getElementById('khrFrameMs');
+  const v = el ? parseInt(el.value) : NaN;
+  return (Number.isFinite(v) && v > 0) ? v : 20; // 冧輸入/非法值時回退去實測嘅官方預設 20ms
+}
+
+// khrSpeedFrames: decoded.speed 原始值 (KHR frame 數)，可以係
+// null/undefined (例如冇 motion 資料嘅 pose)，呢種情況直接回傳
+// null，等 buildPacket18() 自己 fallback 去 UI 嘅「預設 SPD」輸入格。
+function khrFramesToPmaTicks(khrSpeedFrames) {
+  if (khrSpeedFrames === null || khrSpeedFrames === undefined) return null;
+  const khrFrameMs = getKhrFrameMs();
+  const totalMs = khrSpeedFrames * khrFrameMs;
+  let ticks = Math.round(totalMs / PMA_TICK_MS);
+  if (ticks < 1) ticks = 1; // 下限保護：0 tick 會令 firmware 冧等待就即刻讀下一個封包，等同冧換算
+  if (ticks > 255) {
+    // SPD byte 係 uint8_t (0x18 payload[1])，上限 255tick×15ms=3825ms。
+    // 如果 KHR 原意嘅等待時間 (totalMs) 超過呢個上限，clamp 之後會
+    // 令 firmware 實際等待時間比原意短，此消息俾你知呢個 pose 撞咗界，
+    // 未必係「一格格」嘅根源，但值得留意 (例如 KHR 動作入面有段刻意
+    // 停頓好耐嘅 pose，換算後會被壓短)。
+    log(`⚠ Pose speed 換算撞 PMA SPD byte 上限 (${khrSpeedFrames}frame×${khrFrameMs}ms=${totalMs}ms → clamp至255tick=3825ms)，等待時間會比原意短`);
+    ticks = 255;
+  }
+  return ticks;
+}
+
 function convertPoseToPma(decoded) {
   const pmaTargets = {};
   const finalTargets = {};
   const skipped = [];
   const clamped = []; // {channel, khrName, binaryID, pmaName, rawTarget, clampedTarget, min, max}
-  if (!decoded || decoded.type !== 'motion') return { pmaTargets, finalTargets, skipped, clamped, speed: null };
+  if (!decoded || decoded.type !== 'motion') return { pmaTargets, finalTargets, skipped, clamped, speed: null, khrSpeedFrames: null };
 
   for (const ch of decoded.activeChannels) {
     const map = CHANNEL_MAP[ch];
@@ -945,7 +1032,14 @@ function convertPoseToPma(decoded) {
     pmaTargets[map.binaryID] = payloadAngle;
     finalTargets[map.binaryID] = Math.round(finalTarget);
   }
-  return { pmaTargets, finalTargets, skipped, clamped, speed: decoded.speed };
+  // speed：送去 buildPacket18() 嘅 PMA SPD tick 值 (已換算單位)。
+  // khrSpeedFrames：保留原始 KHR frame 數，純粹俾 log/pose table 顯示
+  // 「換算前 → 換算後」對照用，唔會被送落 0x18 封包。
+  return {
+    pmaTargets, finalTargets, skipped, clamped,
+    speed: khrFramesToPmaTicks(decoded.speed),
+    khrSpeedFrames: decoded.speed,
+  };
 }
 
 // ======================================================================
@@ -1011,7 +1105,10 @@ function buildInitCompensationPose() {
     pmaTargets[bid] = payloadAngle;
     finalTargets[bid] = clampedTarget;
   }
-  const converted = { pmaTargets, finalTargets, skipped: [], clamped: [], speed: 40 };
+  // speed=40 係直接寫死嘅 PMA tick 值(唔係嚟自 KHR frame 換算)，
+  // khrSpeedFrames:null 令 selectPose() 嘅顯示邏輯行去「冇 KHR speed
+  // 資料」嗰個分支，唔會誤將 40 當做未換算嘅 KHR frame 數再換一次。
+  const converted = { pmaTargets, finalTargets, skipped: [], clamped: [], speed: 40, khrSpeedFrames: null };
   const packet = Object.keys(pmaTargets).length ? buildPacket18(pmaTargets, 40) : null;
   return {
     fileLabel: null,
@@ -1273,7 +1370,12 @@ function selectPose(idx) {
     ? `　|　${p.converted.skipped.length} 個 KHR channel 冇 PMA 對應 (已略過): ` +
       p.converted.skipped.map(s => s.name).join(', ')
     : '';
-  detail.textContent = `${p.name}　|　speed(tick)=${p.converted.speed ?? '-'}　|　異動 ${Object.keys(p.converted.pmaTargets).length} 個 servo${skipInfo}`;
+  const khrFrames = p.converted.khrSpeedFrames;
+  const pmaTicks = p.converted.speed;
+  const speedInfo = (khrFrames !== null && khrFrames !== undefined)
+    ? `KHR speed=${khrFrames}frame(×${getKhrFrameMs()}ms=${khrFrames * getKhrFrameMs()}ms) → PMA SPD=${pmaTicks}tick(×15ms=${pmaTicks * 15}ms)`
+    : `PMA SPD=${pmaTicks ?? '-'}tick (冇 KHR speed 資料，用返預設值)`;
+  detail.textContent = `${p.name}　|　${speedInfo}　|　異動 ${Object.keys(p.converted.pmaTargets).length} 個 servo${skipInfo}`;
 
   // clamped 警告：KHR 機身活動幅度遠大過 PMA 纖細關節嘅機械極限
   // (尤其肩側擺24/25、肘28/29、腳踝、髖前後)，1:1 映射常撞界，
@@ -1297,27 +1399,27 @@ function selectPose(idx) {
   wrap.innerHTML = '';
   const clampedIds = new Set((p.converted.clamped || []).map(c => c.binaryID));
 
-  function cell(bid, cls) {
-    const info = PMA_SERVOS[bid];
-    const changed = p.converted.pmaTargets.hasOwnProperty(bid);
-    const val = changed ? p.converted.finalTargets[bid] : info.home;
+  function cell(spec) {
+    const info = PMA_SERVOS[spec.bid];
+    const changed = p.converted.pmaTargets.hasOwnProperty(spec.bid);
+    const val = changed ? p.converted.finalTargets[spec.bid] : info.home;
     const wrapCell = document.createElement('div');
-    wrapCell.className = 'humanoid-cell' + (cls ? ' ' + cls : '');
+    wrapCell.className = 'humanoid-cell' + (spec.grp ? ' ' + spec.grp : '');
+    wrapCell.style.gridColumn = `${spec.col} / span ${spec.span}`;
     const d = document.createElement('div');
-    d.className = 'servo-cell' + (changed ? ' changed' : '') + (clampedIds.has(bid) ? ' clamped-warn' : '');
-    d.innerHTML = `<div class="n">${info.short}${clampedIds.has(bid) ? ' ⚠' : ''}</div><div class="v">${val}</div>`;
+    d.className = 'servo-cell' + (changed ? ' changed' : '') + (clampedIds.has(spec.bid) ? ' clamped-warn' : '');
+    d.innerHTML = `<div class="n">${info.short}${clampedIds.has(spec.bid) ? ' ⚠' : ''}</div><div class="v">${val}</div>`;
     wrapCell.appendChild(d);
     return wrapCell;
   }
 
-  // 跟 HUMANOID_GRID_ROWS 逐行/逐格畫，頭部置中喺第一行，
-  // 第二行4格，跟住雙腿逐行成對，配色分組跟 HTH4 睇齊。
-  // 逐行明確指定 grid-row，唔靠 auto-flow 求穩陣(避免有格仔留空
-  // 時錯位)。
+  // 跟 HUMANOID_GRID_ROWS 逐行/逐格畫：頭置中喺最頂、肩4格一行、
+  // 手臂留喺外側、雙腿夾住中間身軀嗰條隙，配色分組跟 HTH4 睇齊。
+  // 逐行明確指定 grid-row + grid-column，唔靠 auto-flow 求穩陣。
   HUMANOID_GRID_ROWS.forEach((row, rowIdx) => {
     row.forEach(spec => {
       if (!spec) return; // 留空嘅格仔唔畫任何嘢，畀 CSS grid 自然留白
-      const c = cell(spec.bid, spec.cls);
+      const c = cell(spec);
       c.style.gridRow = String(rowIdx + 1);
       wrap.appendChild(c);
     });
