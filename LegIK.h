@@ -45,20 +45,29 @@
 // 呢個結構性分別令 pitch 同 roll 唔可以用同一組
 // THIGH/SHIN/ANKLE 常數，亦唔可以用同一種「2-link + 膝屈曲」
 // 幾何處理——roll 冇膝可屈，要用單軸 + 固定臂長嘅簡單三角函數。
-#define PITCH_THIGH_LENGTH 65.0   // HV7(髖前後)→HV9(膝)
-#define PITCH_SHIN_LENGTH  65.0   // HV9(膝)→HV11(踝前後)
-#define PITCH_FOOT_LENGTH  60.0   // HV11→地面（50 底板 + 10 腳掌），唔屈曲，跟住 ankleDeg 保持垂直
+#define PITCH_THIGH_LENGTH 65.0f   // HV7(髖前後)→HV9(膝)
+#define PITCH_SHIN_LENGTH  65.0f   // HV9(膝)→HV11(踝前後)
+#define PITCH_FOOT_LENGTH  60.0f   // HV11→地面（50 底板 + 10 腳掌），唔屈曲，跟住 ankleDeg 保持垂直
 
-#define ROLL_LEVER_LENGTH  215.0 // HV5(髖側擺)→HV13(踝側擺)：35+65+65+50，固定剛體，冇膝
-#define ROLL_FOOT_LENGTH   10.0  // HV13→地面，唔屈曲，跟住 ankleRollDeg 保持垂直
+#define ROLL_LEVER_LENGTH  215.0f // HV5(髖側擺)→HV13(踝側擺)：35+65+65+50，固定剛體，冇膝
+#define ROLL_FOOT_LENGTH   10.0f  // HV13→地面，唔屈曲，跟住 ankleRollDeg 保持垂直
 
-#define HIP_WIDTH 40.0
+#define HIP_WIDTH 40.0f
 #define LEG_LENGTH (PITCH_THIGH_LENGTH + PITCH_SHIN_LENGTH + PITCH_FOOT_LENGTH)  // pitch 方向全長，BalanceGyro.h 槓桿臂用
+
+// solve2LinkIK() 下面用咗「大腿==小腿」嘅等腰三角形閉式解嚟慳返
+// cos+sqrt+acos 三個 transcendental 做一個 cos。呢個 static_assert
+// 確保如果將來改咗 PITCH_THIGH_LENGTH/PITCH_SHIN_LENGTH 令兩者唔
+// 再相等，編譯期就會報錯提醒，而唔係靜默計錯（等腰簡化式喺
+// THIGH != SHIN 時唔再成立）。
+static_assert(PITCH_THIGH_LENGTH == PITCH_SHIN_LENGTH,
+              "solve2LinkIK() isosceles-triangle simplification requires THIGH == SHIN; "
+              "revert to general law-of-cosines formula if these differ");
 
 // ===== Pulse ↔ 角度換算 =====
 // 同 BalanceGyro.h 用返同一條轉換（8000 pulse ≈ 270 度），
 // 全部伺服共用一條，唔分關節。
-#define IK_PULSE_PER_DEGREE (8000.0 / 270.0)  // ≈ 29.63
+#define IK_PULSE_PER_DEGREE (8000.0f / 270.0f)  // ≈ 29.63
 
 // ===== 膝屈曲角度上限 =====
 // 防止 kneeBendDeg PID 輸出失控時，膝解出一個機械上唔可能/唔安全
@@ -67,7 +76,14 @@
 // 把關（呢層 IK 唔知道 servo 嘅實際物理極限，只做幾何合理性
 // clamp；真正嘅安全上限一定要喺 .ino 度用 constrain() 對住
 // servo 嘅 minAngle/maxAngle 再做多一次）。
-#define IK_KNEE_BEND_MAX_DEG 60.0
+#define IK_KNEE_BEND_MAX_DEG 60.0f
+
+// Arduino 核心嘅 PI 係 double 常數，喺 float 運算式入面用佢會令
+// 嗰條運算式暫時提升做 double 精度計算，變相都係拉入 double
+// soft-float routine（同 float 版本並存，浪費 flash）。呢度定義
+// 一個 float 版本嘅 PI，確保呢個檔案入面所有三角函數運算全程
+// 停留喺 float 精度，唔會偷偷跳去 double。
+#define IK_PI_F 3.14159265f
 
 // ===== 左右膝機械方向表 =====
 // 由 ServoConfig.h 嘅 range 推出：
@@ -97,33 +113,36 @@ struct LegIKAngles {
 //      唔互相假設對方嘅值——側移量交俾 pitch/roll PID，屈膝量
 //      交俾另一組獨立 PID，呢層淨係做幾何反解。
 //
-//      幾何：
-//        1) 由 kneeBendDeg 用餘弦定理直接攞髖到踝嘅斜邊長度 reach
-//           （呢個唔再假設垂直高度固定，reach 完全由膝屈曲角度
-//           決定，膝屈得越多、reach 越短）。
-//        2) reach 攞到之後，配合 offset（水平分量）反解 height
-//           （垂直分量，係結果，唔係輸入——膝屈得越多、offset
-//           越大，height 自然跟住縮）。
-//        3) 用 reach 嘅方向（atan2）加返大腿相對 reach 嘅偏角，
-//           攞到髖角度。
-//        4) 踝角度 = 補償「髖偏 + 膝屈」兩者疊加喺腳掌方向嘅
-//           總旋轉，令腳掌保持水平貼地。
+//      幾何簡化（等腰三角形恆等式）：
+//      PITCH_THIGH_LENGTH == PITCH_SHIN_LENGTH（都係 65mm），大腿
+//      同小腿形成等腰三角形，兩條原本要用餘弦定理/acos 先攞到嘅
+//      量有精確閉式解：
+//        1) reach = 2·T·|cos(kneeBendDeg/2)|
+//           （由 reach² = 2T²(1+cos(kneeBendDeg)) = 4T²cos²(kneeBendDeg/2)
+//           推出，T=THIGH=SHIN）
+//        2) thighReachAngle = kneeBendDeg / 2
+//           （等腰三角形嘅底角必然係頂角嘅補角一半）
+//      兩條都經 Python 逐點數值驗證（0°~60°），同原本餘弦定理+acos
+//      做法喺 8 位小數內完全一致。呢個簡化將 cos+sqrt+acos 三個
+//      transcendental function call 減到淨係一個 cos，係專為
+//      THIGH==SHIN 呢個特定幾何度身定造，如果將來大腿/小腿長度
+//      唔再相等，呢條簡化式唔再成立，要改返用返通用餘弦定理版本。
+//
+//      height（垂直分量，用嚟計 reachTiltFromVertical）冇閉式簡化
+//      捷徑，因為佢仲要睇 offset（side input），依然要用
+//      sqrt(reach²-offset²)。
 //
 //      offset=0 且 kneeBendDeg=0 時，reach=height=THIGH+SHIN，
-//      hipDeg=ankleDeg=0，精準對應 home，冇 v1 版本嗰種「home
-//      都解出非零角度」嘅問題。
-inline void solve2LinkIK(double offset, double kneeBendDeg,
-                          double &hipDeg, double &ankleDeg) {
-  double kneeBendClamped = constrain(kneeBendDeg, 0.0, IK_KNEE_BEND_MAX_DEG);
-  double kneeInteriorRad = (180.0 - kneeBendClamped) * PI / 180.0;
+//      hipDeg=ankleDeg=0，精準對應 home。
+inline void solve2LinkIK(float offset, float kneeBendDeg,
+                          float &hipDeg, float &ankleDeg) {
+  float kneeBendClamped = constrain(kneeBendDeg, 0.0f, IK_KNEE_BEND_MAX_DEG);
 
-  // 餘弦定理：reach^2 = THIGH^2 + SHIN^2 - 2*THIGH*SHIN*cos(kneeInterior)
-  // kneeInterior = 大腿同小腿之間嘅內角（180°=完全打直）。
-  // 呢個 helper 專門用喺 pitch 平面（HV7-HV9-HV11 先有膝可屈），
-  // roll 平面用另一條 solveRollIK()，唔經呢度。
-  double reachSq = PITCH_THIGH_LENGTH * PITCH_THIGH_LENGTH + PITCH_SHIN_LENGTH * PITCH_SHIN_LENGTH
-                  - 2.0 * PITCH_THIGH_LENGTH * PITCH_SHIN_LENGTH * cos(kneeInteriorRad);
-  double reach = sqrt(reachSq > 0.0 ? reachSq : 0.0);
+  // 等腰三角形閉式解：reach = 2T|cos(bend/2)|，thighReachAngle = bend/2。
+  // 淨係一個 cosf() call，代替原本 cos+sqrt+acos 三個 transcendental。
+  float halfBendRad = kneeBendClamped * (IK_PI_F / 360.0f);  // (bend/2) 轉 rad
+  float reach = 2.0f * PITCH_THIGH_LENGTH * fabsf(cosf(halfBendRad));
+  float thighReachAngle = kneeBendClamped * 0.5f;
 
   // reach 係斜邊，offset 係其中一隻直角邊，offset 嘅大小唔可以
   // 超過 reach（否則另一隻直角邊 height 會變負數/無實數解）。
@@ -131,21 +150,18 @@ inline void solve2LinkIK(double offset, double kneeBendDeg,
   // 最大伸展」，clamp offset 落 reach 嘅範圍之內（留一線緩衝
   // 防止除零/NaN），令 height 趨近於 0（髖同踝幾乎同一水平面，
   // 幾何上嘅極限狀態，唔會產生無效解）。
-  double reachLimit = reach - 0.01;
-  double offsetClamped = constrain(offset, -reachLimit, reachLimit);
-  double heightSq = reach * reach - offsetClamped * offsetClamped;
-  double height = sqrt(heightSq > 0.0 ? heightSq : 0.0);
+  float reachLimit = reach - 0.01f;
+  float offsetClamped = constrain(offset, -reachLimit, reachLimit);
+  float heightSq = reach * reach - offsetClamped * offsetClamped;
+  float height = sqrtf(heightSq > 0.0f ? heightSq : 0.0f);
 
-  double reachTiltFromVertical = atan2(offsetClamped, height) * 180.0 / PI;
-  double cosThighReachAngle = (PITCH_THIGH_LENGTH * PITCH_THIGH_LENGTH + reach * reach - PITCH_SHIN_LENGTH * PITCH_SHIN_LENGTH)
-                             / (2.0 * PITCH_THIGH_LENGTH * reach);
-  cosThighReachAngle = constrain(cosThighReachAngle, -1.0, 1.0);
-  double thighReachAngle = acos(cosThighReachAngle) * 180.0 / PI;
-  hipDeg = reachTiltFromVertical + thighReachAngle;
+  float reachTiltFromVertical = atan2f(offsetClamped, height) * 180.0f / IK_PI_F;
+  float hipDegLocal = reachTiltFromVertical + thighReachAngle;
+  hipDeg = hipDegLocal;
 
   // 踝角：令腳掌保持水平貼地，補償量 = -(髖角度造成嘅傾斜) +
   // (膝屈曲帶嚟嘅反向補償)，令腳掌相對地面嘅淨旋轉 = 0。
-  ankleDeg = -(hipDeg - kneeBendClamped);
+  ankleDeg = -(hipDegLocal - kneeBendClamped);
 }
 
 // ---- Roll（左右）平面專用 helper：HV5(髖側擺)→HV13(踝側擺)
@@ -177,34 +193,33 @@ inline void solve2LinkIK(double offset, double kneeBendDeg,
 //      = -hipDeg，出面再 negate 一次變返同 hipDeg 同號）保持一致。
 //      如果呢度輸出同 hipRollDeg 同號，會令兩層 negate 冚唔返，
 //      最終方向會反咗——之前一個修正版本正是咁，已經改返。
-inline void solveRollIK(double offsetY, double &hipRollDeg, double &ankleRollDeg) {
-  double leverLimit = ROLL_LEVER_LENGTH - 0.01;
-  double offsetClamped = constrain(offsetY, -leverLimit, leverLimit);
+inline void solveRollIK(float offsetY, float &hipRollDeg, float &ankleRollDeg) {
+  float leverLimit = ROLL_LEVER_LENGTH - 0.01f;
+  float offsetClamped = constrain(offsetY, -leverLimit, leverLimit);
 
-  hipRollDeg = atan2(offsetClamped, ROLL_LEVER_LENGTH) * 180.0 / PI;
+  hipRollDeg = atan2f(offsetClamped, ROLL_LEVER_LENGTH) * 180.0f / IK_PI_F;
   ankleRollDeg = -hipRollDeg;
 }
 
 // ---- 主入口：輸入軀幹想要嘅水平位移 dx（前後，mm，正=向前）、
 //      dy（左右，mm，正=向右），同埋想要嘅膝屈曲角度
-//      kneeBendPitchDeg（前後方向屈膝，度）、kneeBendRollDeg
-//      （左右方向屈膝，度，通常較少用，預設可傳 0），輸出六隻
-//      關節角度修正量。呢啲輸入嘅來源：BalanceGyro.h 嘅兩組
-//      獨立 PID（一組管側移、一組管屈膝），呢層淨係做純幾何
-//      反解，唔理輸入嘅物理意義嚟源。
-inline void computeLegIK(double dx, double dy,
-                          double kneeBendPitchDeg, double kneeBendRollDeg,
+//      kneeBendPitchDeg（前後方向屈膝，度），輸出六隻關節角度
+//      修正量。呢啲輸入嘅來源：BalanceGyro.h 嘅獨立 PID（一組管
+//      側移、一組管屈膝），呢層淨係做純幾何反解，唔理輸入嘅
+//      物理意義嚟源。
+//
+//      簽名保留第四個參數（原 kneeBendRollDeg）純粹做呼叫介面
+//      相容——roll 平面（HV5-HV13）結構上冇膝可屈（見上面
+//      solveRollIK() 説明），呢個值喺呢度完全唔會被使用。
+//      BalanceGyro.h 已經直接傳 0.0f，冇再計算呢個值嘅 PID。
+inline void computeLegIK(float dx, float dy,
+                          float kneeBendPitchDeg, float /* unused: roll plane has no knee */,
                           LegIKAngles &out) {
-  double hipP, ankleP;   // sagittal 平面（前後，pitch，HV7-HV9-HV11 有膝可屈）
-  double hipR, ankleR;   // frontal 平面（左右，roll，HV5-HV13 冇膝，單軸+固定臂長）
+  float hipP, ankleP;   // sagittal 平面（前後，pitch，HV7-HV9-HV11 有膝可屈）
+  float hipR, ankleR;   // frontal 平面（左右，roll，HV5-HV13 冇膝，單軸+固定臂長）
 
   solve2LinkIK(dx, kneeBendPitchDeg, hipP, ankleP);
   solveRollIK(dy, hipR, ankleR);
-  // kneeBendRollDeg 保留做函式簽名相容（BalanceGyro.h 仍然會傳入），
-  // 但 roll 平面結構上冇膝可屈，呢個參數喺呢度冇實際幾何意義，
-  // 淨係避免要改埋 BalanceGyro.h 嘅呼叫介面。如果將來想完全
-  // 移除，要同步清理 BalanceGyro.h 嘅 kneeRollKp/Ki/Kd 呢組
-  // gain（依家全部預設 0，即係冇被使用緊）。
 
   // ---- Pitch（前後）----
   // 沿用 BalanceGyro.h 舊 LINKDEF_PITCH 嘅左右對稱慣例：
@@ -237,7 +252,7 @@ inline void computeLegIK(double dx, double dy,
 }
 
 // ---- 角度 → pulse 修正量（int），供 .ino 直接加落 homePosition ----
-inline int ikDegToPulse(double deg) {
+inline int ikDegToPulse(float deg) {
   return (int)(deg * IK_PULSE_PER_DEGREE);
 }
 

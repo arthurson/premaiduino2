@@ -287,8 +287,44 @@ static uint8_t motionFlashReadNextPacket(uint8_t *outBuf) {
   return lenByte;
 }
 
-// 由 loop() 每次 call 一次。非阻塞：如果而家仲喺度等緊上一個封包
-// 嘅 SPD tick 時間就直接 return，時間到先讀下一個封包執行。
+// ===== Servo 全速轉速估算（防止 SPD tick 太短、servo 未郁完就催下一個）=====
+// KRS-3301 datasheet: 7.4V 時 0.14s/60°（全速，ICS speed=127 情況下嘅上限估算，
+// 唔同型號/電壓實際會有落差，呢度取一個保守嘅參考值）。
+// pulse↔degree: 8000 pulse ≈ 270 度（同 LegIK.h IK_PULSE_PER_DEGREE 一致）。
+#define SERVO_DEG_PER_MS (60.0f / 140.0f)             // ≈0.4286 度/ms
+#define SERVO_PULSE_PER_DEGREE (8000.0f / 270.0f)     // ≈29.63
+#define SERVO_PULSE_PER_MS (SERVO_DEG_PER_MS * SERVO_PULSE_PER_DEGREE)  // ≈12.7 pulse/ms
+
+// 讀一個 0x18 封包入面所有 servo 嘅目標角度，同佢哋各自
+// currentTunePos（上一次送出嘅目標）比較，攞最大移動距離，
+// 換算做「全速走完呢段距離最少要幾多 ms」。
+// 呢個唔係計「應該用邊個 speed」，而係計「就算 servo 已經全速
+// (DEFAULT_SPEED_HV/MV) 郁緊，都仲要幾耐先真係到得切」，用嚟做
+// SPD tick 換算出嚟嘅等待時間嘅下限，避免 SPD 太短時 firmware
+// 唔理 servo 有冇到就催緊下一個目標，造成「跳格」。
+static uint32_t pmaMinTravelMsForPacket(const uint8_t *payload, uint8_t payloadLen) {
+  if (payloadLen < 2) return 0;
+  uint16_t maxPulseDelta = 0;
+  for (uint8_t i = 2; i + 2 < payloadLen; i += 3) {
+    uint8_t pmaId = payload[i];
+    uint16_t lo = payload[i + 1];
+    uint16_t hi = payload[i + 2];
+    uint16_t rawAngle = (hi << 8) | lo;
+    if (rawAngle == 0) continue;  // 脫力指令，冇實際移動距離
+
+    ServoInfo *servo = findServoByPmaId(pmaId);
+    if (!servo) continue;
+
+    uint16_t targetPos = applyHomeOffset(servo, rawAngle, servo->baselineCenter);
+    uint16_t delta = (targetPos > servo->currentTunePos)
+                      ? (targetPos - servo->currentTunePos)
+                      : (servo->currentTunePos - targetPos);
+    if (delta > maxPulseDelta) maxPulseDelta = delta;
+  }
+  if (maxPulseDelta == 0) return 0;
+  return (uint32_t)((float)maxPulseDelta / SERVO_PULSE_PER_MS);
+}
+
 static void motionPlaybackUpdate() {
   if (motionPlayState != MOTION_PLAY_RUNNING) return;
   if ((long)(millis() - motionPlayNextTickMs) < 0) return;  // 未到時間
@@ -300,6 +336,12 @@ static void motionPlaybackUpdate() {
     return;
   }
 
+  // 下限保護要喺 pmaExecutePacket() 之前計算，因為執行完之後
+  // servo->currentTunePos 已經俾呢個 packet 嘅新目標蓋咗，再計
+  // 距離會變成「新目標 vs 新目標」=0，失去保護意義。
+  uint8_t cmd0 = (len > 1) ? pkt[1] : 0;
+  uint32_t minTravelMs = (cmd0 == 0x18) ? pmaMinTravelMsForPacket(pkt + 2, len - 2) : 0;
+
   pmaExecutePacket(pkt, len, /*fromFlashPlayback=*/true);
   motionPlayOffset += len;
 
@@ -308,7 +350,14 @@ static void motionPlaybackUpdate() {
   uint8_t cmd = (len > 1) ? pkt[1] : 0;
   uint8_t spdTicks = (cmd == 0x18 && len > 3) ? pkt[3] : 1;
   if (spdTicks == 0) spdTicks = 1;
-  motionPlayNextTickMs = millis() + (uint32_t)spdTicks * 15u;
+  uint32_t waitMs = (uint32_t)spdTicks * 15u;
+
+  // SPD tick 換算出嚟嘅等待時間，唔可以短過 servo 全速走完呢個
+  // packet 最大移動距離所需嘅時間，否則 servo 未到就催下一個
+  // 目標，變成跳格。
+  if (minTravelMs > waitMs) waitMs = minTravelMs;
+
+  motionPlayNextTickMs = millis() + waitMs;
 }
 
 static void motionPlaybackStart(uint8_t startPage, uint16_t totalLen) {

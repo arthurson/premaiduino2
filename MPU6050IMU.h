@@ -25,6 +25,21 @@
 #define MPU6050_ACCEL_LSB_PER_G   16384.0f
 #define MPU6050_GYRO_LSB_PER_DPS  131.0f
 
+// 除法喺 soft-float（呢個 MCU 冇 FPU）通常比乘法貴，而
+// imuUpdate() 係 hot path（50Hz 定期 call）。呢兩條轉換每次都係
+// 「raw / 常數」，改用預先算好嘅倒數做乘法，等 imuUpdate() 每次
+// tick 少做兩次除法。MPU6050_ACCEL_LSB_PER_G 係 2 的冪，倒數精確
+// 冇損失；MPU6050_GYRO_LSB_PER_DPS(131) 唔係 2 的冪，倒數會有極
+// 微小捨入誤差（float 精度下遠低於陀螺本身嘅讀數雜訊，可忽略）。
+#define MPU6050_ACCEL_G_PER_LSB (1.0f / MPU6050_ACCEL_LSB_PER_G)
+#define MPU6050_GYRO_DPS_PER_LSB (1.0f / MPU6050_GYRO_LSB_PER_DPS)
+
+// Arduino 核心嘅 PI 係 double 常數，喺 float 運算式用佢會令嗰條
+// 運算式暫時提升做 double 精度，變相拉入 double soft-float
+// routine（同 float 版本並存，浪費 flash）。呢度定義 float 版本，
+// 同 LegIK.h 做法一致，確保 imuUpdate() 全程停留喺 float 精度。
+#define IMU_PI_F 3.14159265f
+
 // ===== 資料結構 =====
 struct IMUData {
   int16_t accelRawX, accelRawY, accelRawZ;
@@ -120,9 +135,9 @@ inline void imuCalibrateGyro(uint16_t samples = 200) {
       int16_t gx = (int16_t)((buf[8]  << 8) | buf[9]);
       int16_t gy = (int16_t)((buf[10] << 8) | buf[11]);
       int16_t gz = (int16_t)((buf[12] << 8) | buf[13]);
-      sumX += gx / MPU6050_GYRO_LSB_PER_DPS;
-      sumY += gy / MPU6050_GYRO_LSB_PER_DPS;
-      sumZ += gz / MPU6050_GYRO_LSB_PER_DPS;
+      sumX += gx * MPU6050_GYRO_DPS_PER_LSB;
+      sumY += gy * MPU6050_GYRO_DPS_PER_LSB;
+      sumZ += gz * MPU6050_GYRO_DPS_PER_LSB;
       ok++;
     }
     delay(2);
@@ -176,13 +191,13 @@ inline bool imuUpdate() {
   imuData.gyroRawY = (int16_t)((buf[10] << 8) | buf[11]);
   imuData.gyroRawZ = (int16_t)((buf[12] << 8) | buf[13]);
 
-  imuData.accelX = imuData.accelRawX / MPU6050_ACCEL_LSB_PER_G;
-  imuData.accelY = imuData.accelRawY / MPU6050_ACCEL_LSB_PER_G;
-  imuData.accelZ = imuData.accelRawZ / MPU6050_ACCEL_LSB_PER_G;
+  imuData.accelX = imuData.accelRawX * MPU6050_ACCEL_G_PER_LSB;
+  imuData.accelY = imuData.accelRawY * MPU6050_ACCEL_G_PER_LSB;
+  imuData.accelZ = imuData.accelRawZ * MPU6050_ACCEL_G_PER_LSB;
 
-  imuData.gyroX = (imuData.gyroRawX / MPU6050_GYRO_LSB_PER_DPS) - gyroOffsetX;
-  imuData.gyroY = (imuData.gyroRawY / MPU6050_GYRO_LSB_PER_DPS) - gyroOffsetY;
-  imuData.gyroZ = (imuData.gyroRawZ / MPU6050_GYRO_LSB_PER_DPS) - gyroOffsetZ;
+  imuData.gyroX = (imuData.gyroRawX * MPU6050_GYRO_DPS_PER_LSB) - gyroOffsetX;
+  imuData.gyroY = (imuData.gyroRawY * MPU6050_GYRO_DPS_PER_LSB) - gyroOffsetY;
+  imuData.gyroZ = (imuData.gyroRawZ * MPU6050_GYRO_DPS_PER_LSB) - gyroOffsetZ;
 
   // 主板竪直安裝，實測軸向同標準「Z軸朝上」假設唔同（2026-07 實測確認）：
   //   Y 軸 = 重力軸（企定時 accelY≈1.0g）
@@ -191,8 +206,8 @@ inline bool imuUpdate() {
   float accelZCorrected = imuData.accelZ - MPU6050_ACCEL_Z_MOUNT_OFFSET;
   float accelPitch = atan2f(-accelZCorrected,
                              sqrtf(imuData.accelX * imuData.accelX +
-                                   imuData.accelY * imuData.accelY)) * 180.0f / PI;
-  float accelRoll = atan2f(imuData.accelX, imuData.accelY) * 180.0f / PI;
+                                   imuData.accelY * imuData.accelY)) * 180.0f / IMU_PI_F;
+  float accelRoll = atan2f(imuData.accelX, imuData.accelY) * 180.0f / IMU_PI_F;
 
   if (!imuFilterInitialized || dt <= 0.0f) {
     // 第一次讀數，或者 dt 唔可靠：直接用 accel 角度做起點，

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <math.h>  
+#include <string.h>  // strlen()，短碼指令 prefix 判斷用
 #include <stm32f1xx_hal_flash.h>
 #include <stm32f1xx_hal_flash_ex.h>
 
@@ -139,6 +140,26 @@ ServoInfo *findServoByBinaryID(uint8_t binaryID) {
 }
 
 // 失敗時 return false；setPos/setSpd 會 retry 一次（半雙工單線偶發 race condition）
+// 共用 helper：safeSetSpd/Strc/Cur/Tmp 四個 function 嘅範圍檢查
+// 錯誤訊息全部係同一個 pattern（"setXxx 範圍錯誤 (lo-hi): 名 val="），
+// 抽出嚟慳返 4 次重複嘅 print 骨架。fnName/rangeStr 用 F() 包住
+// 嘅 flash string，唔會拉入額外 RAM。
+// ⚠ 行為細節：原本四個 function 分別印 "spd="/"strc="/"curlim="/
+// "tmplim="，而家統一印 "val="——純粹 console debug 輸出文字有
+// 少少改變，唔影響任何邏輯/控制行為，如果你哋有 script/工具
+// 專門 parse 呢行輸出，要留意呢個文字改動。
+inline void printServoRangeError(const __FlashStringHelper *fnName,
+                                  const __FlashStringHelper *rangeStr,
+                                  const char *servoName, int val) {
+  Serial1.print(fnName);
+  Serial1.print(F(" 範圍錯誤 ("));
+  Serial1.print(rangeStr);
+  Serial1.print(F("): "));
+  Serial1.print(servoName);
+  Serial1.print(F(" val="));
+  Serial1.println(val);
+}
+
 bool safeSetPos(ServoInfo *servo, uint16_t pos) {
   if (!servo) return false;
   if (!servo->enabled) return true;
@@ -158,10 +179,7 @@ bool safeSetSpd(ServoInfo *servo, uint8_t spd) {
   if (!servo) return false;
   if (!servo->enabled) return true;
   if (spd < 1 || spd > 127) {
-    Serial1.print(F("setSpd 範圍錯誤 (1-127): "));
-    Serial1.print(servo->name);
-    Serial1.print(F(" spd="));
-    Serial1.println(spd);
+    printServoRangeError(F("setSpd"), F("1-127"), servo->name, spd);
     return false;
   }
   int result = servo->icsPort->setSpd(servo->servoID, spd);
@@ -177,10 +195,7 @@ bool safeSetSpd(ServoInfo *servo, uint8_t spd) {
 bool safeSetStrc(ServoInfo *servo, uint8_t strc) {
   if (!servo) return false;
   if (strc < 1 || strc > 127) {
-    Serial1.print(F("setStrc 範圍錯誤 (1-127): "));
-    Serial1.print(servo->name);
-    Serial1.print(F(" strc="));
-    Serial1.println(strc);
+    printServoRangeError(F("setStrc"), F("1-127"), servo->name, strc);
     return false;
   }
   int result = servo->icsPort->setStrc(servo->servoID, strc);
@@ -190,10 +205,7 @@ bool safeSetStrc(ServoInfo *servo, uint8_t strc) {
 bool safeSetCur(ServoInfo *servo, uint8_t curlim) {
   if (!servo) return false;
   if (curlim < 1 || curlim > 63) {
-    Serial1.print(F("setCur 範圍錯誤 (1-63): "));
-    Serial1.print(servo->name);
-    Serial1.print(F(" curlim="));
-    Serial1.println(curlim);
+    printServoRangeError(F("setCur"), F("1-63"), servo->name, curlim);
     return false;
   }
   int result = servo->icsPort->setCur(servo->servoID, curlim);
@@ -203,10 +215,7 @@ bool safeSetCur(ServoInfo *servo, uint8_t curlim) {
 bool safeSetTmp(ServoInfo *servo, uint8_t tmplim) {
   if (!servo) return false;
   if (tmplim < 1 || tmplim > 127) {
-    Serial1.print(F("setTmp 範圍錯誤 (1-127): "));
-    Serial1.print(servo->name);
-    Serial1.print(F(" tmplim="));
-    Serial1.println(tmplim);
+    printServoRangeError(F("setTmp"), F("1-127"), servo->name, tmplim);
     return false;
   }
   int result = servo->icsPort->setTmp(servo->servoID, tmplim);
@@ -456,15 +465,15 @@ bool processASCIICommand(String cmd) {
       Serial1.print(F(" ("));
       Serial1.print(servo->name);
       Serial1.print(F(") 角度="));
-      Serial1.print(pos != ICS_FALSE ? String(pos) : String("讀取失敗"));
+      if (pos != ICS_FALSE) Serial1.print(pos); else Serial1.print(F("讀取失敗"));
       Serial1.print(F(" Stretch="));
-      Serial1.print(strc != ICS_FALSE ? String(strc) : String("讀取失敗"));
+      if (strc != ICS_FALSE) Serial1.print(strc); else Serial1.print(F("讀取失敗"));
       Serial1.print(F(" Speed="));
-      Serial1.print(spd != ICS_FALSE ? String(spd) : String("讀取失敗"));
+      if (spd != ICS_FALSE) Serial1.print(spd); else Serial1.print(F("讀取失敗"));
       Serial1.print(F(" 電流上限="));
-      Serial1.print(cur != ICS_FALSE ? String(cur) : String("讀取失敗"));
+      if (cur != ICS_FALSE) Serial1.print(cur); else Serial1.print(F("讀取失敗"));
       Serial1.print(F(" 溫度上限="));
-      Serial1.println(tmp != ICS_FALSE ? String(tmp) : String("讀取失敗"));
+      if (tmp != ICS_FALSE) Serial1.println(tmp); else Serial1.println(F("讀取失敗"));
       return true;
     }
     return true;
@@ -526,33 +535,50 @@ void processCommand(String cmd) {
   cmd.trim();
   cmd.toUpperCase();
 
-  // 短寫 alias：轉返做完整指令，之後行返原本邏輯，唔使逐個分支改
-  if (cmd == "V") cmd = "VOLTAGE";
-  else if (cmd == "G") cmd = "IMU";
-  else if (cmd == "GC") cmd = "IMU CAL";
-  else if (cmd == "HM") cmd = "HOME";
-  else if (cmd == "F") cmd = "FREE ALL";
-  else if (cmd == "ST") cmd = "STOP";
-  else if (cmd == "PS") cmd = "PMASTAT";
-  else if (cmd == "A") cmd = "ANGLES";
-  else if (cmd == "B ON") cmd = "BALANCE ON";
-  else if (cmd == "B OFF") cmd = "BALANCE OFF";
-  else if (cmd == "B") cmd = "BALANCE";
+  // 短寫 alias：轉返做完整指令，之後行返原本邏輯，唔使逐個分支改。
+  // 用 table 代替原本 11 條 if/else if——一對一映射，用 loop 查表
+  // 慳返重複嘅 if/else 骨架。
+  {
+    struct AliasEntry { const char *shortCode; const char *fullCmd; };
+    static const AliasEntry aliases[] = {
+      { "V",     "VOLTAGE"      },
+      { "G",     "IMU"          },
+      { "GC",    "IMU CAL"      },
+      { "HM",    "HOME"         },
+      { "F",     "FREE ALL"     },
+      { "ST",    "STOP"         },
+      { "PS",    "PMASTAT"      },
+      { "A",     "ANGLES"       },
+      { "B ON",  "BALANCE ON"   },
+      { "B OFF", "BALANCE OFF"  },
+      { "B",     "BALANCE"      },
+    };
+    for (uint8_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+      if (cmd == aliases[i].shortCode) {
+        cmd = aliases[i].fullCmd;
+        break;
+      }
+    }
+  }
 
   // WALKSET 短碼直達：短碼本身可以直接當指令打，唔使成日打
   // 「WALKSET BALANCE」/「WALKSET」呢個字首。轉譯之後行返原有
   // WALKSET parsing 邏輯，唔使重寫成套 parsing。
   //
-  // BALANCE 子指令短碼（PP/PI/PD/RP/RI/RD/KPP/KPI/KPD/KRP/KRI/KRD）：
+  // BALANCE 子指令短碼（PP/PI/PD/RP/RI/RD/KPP/KPI/KPD）：
   // 呢批短碼本身喺 WALKSET BALANCE 入面已經識別，呢度淨係補返
   // 「唔使打 WALKSET BALANCE 呢個字首」嘅捷徑。用 startsWith 判斷
   // 開頭字（+空格）避免同其他指令撞名。
   {
     const char *balanceAxes[] = {"PP", "PI", "PD", "RP", "RI", "RD",
-                                  "KPP", "KPI", "KPD", "KRP", "KRI", "KRD"};
+                                  "KPP", "KPI", "KPD"};
     for (uint8_t i = 0; i < sizeof(balanceAxes) / sizeof(balanceAxes[0]); i++) {
-      String axis = balanceAxes[i];
-      if (cmd == axis || cmd.startsWith(axis + String(" "))) {
+      const char *axis = balanceAxes[i];
+      uint8_t axisLen = strlen(axis);
+      // 手動判斷「開頭字 + 空格/結尾」，避免逐次 loop 都用 String
+      // concat（axis + String(" ")）建臨時物件。
+      if (cmd.equals(axis) ||
+          (cmd.startsWith(axis) && cmd.length() > axisLen && cmd[axisLen] == ' ')) {
         cmd = "WALKSET BALANCE " + cmd;
         break;
       }
@@ -564,8 +590,15 @@ void processCommand(String cmd) {
   {
     const char *servoParams[] = {"STRC", "SPD", "CUR", "TMP"};
     for (uint8_t i = 0; i < sizeof(servoParams) / sizeof(servoParams[0]); i++) {
-      String p = servoParams[i];
-      if (cmd.startsWith(p + String(" HV")) || cmd.startsWith(p + String(" MV"))) {
+      const char *p = servoParams[i];
+      uint8_t pLen = strlen(p);
+      // 手動判斷「開頭字 + " HV" / " MV"」，避免逐次 loop 用 String
+      // concat 建臨時物件（原本 String(p)+String(" HV") 兩層建構）。
+      bool matchHV = cmd.startsWith(p) && cmd.length() > (size_t)(pLen + 2)
+                     && cmd[pLen] == ' ' && cmd[pLen + 1] == 'H' && cmd[pLen + 2] == 'V';
+      bool matchMV = cmd.startsWith(p) && cmd.length() > (size_t)(pLen + 2)
+                     && cmd[pLen] == ' ' && cmd[pLen + 1] == 'M' && cmd[pLen + 2] == 'V';
+      if (matchHV || matchMV) {
         cmd = "WALKSET " + cmd;
         break;
       }
@@ -578,8 +611,9 @@ void processCommand(String cmd) {
   {
     const char *walkParams[] = {"LEN", "ROLL", "PITCH"};
     for (uint8_t i = 0; i < sizeof(walkParams) / sizeof(walkParams[0]); i++) {
-      String p = walkParams[i];
-      if (cmd.startsWith(p + String(" "))) {
+      const char *p = walkParams[i];
+      uint8_t pLen = strlen(p);
+      if (cmd.startsWith(p) && cmd.length() > pLen && cmd[pLen] == ' ') {
         cmd = "WALKSET " + cmd;
         break;
       }
@@ -759,12 +793,14 @@ void processCommand(String cmd) {
       } else if (paramName == "TICKMS") {
         Serial1.println(F("TICKMS 需要重新編譯（#define TABLE_WALK_TICK_MS），暫不支援即時調整"));
       } else if (paramName == "BALANCE") {
-        // 格式: WALKSET BALANCE <PP|PI|PD|RP|RI|RD|KPP|KPI|KPD|KRP|KRI|KRD> <值>
+        // 格式: WALKSET BALANCE <PP|PI|PD|RP|RI|RD|KPP|KPI|KPD> <值>
         // 短寫對照：P=Pitch R=Roll K=Knee，尾字 P/I/D=PID三項。
         //   PP =PITCH_P  PI =PITCH_I  PD =PITCH_D
         //   RP =ROLL_P   RI =ROLL_I   RD =ROLL_D
         //   KPP=KNEE_PITCH_P  KPI=KNEE_PITCH_I  KPD=KNEE_PITCH_D
-        //   KRP=KNEE_ROLL_P   KRI=KNEE_ROLL_I   KRD=KNEE_ROLL_D
+        // 注：冇 KRP/KRI/KRD（膝屈曲-roll方向）—— roll 平面
+        // （HV5-HV13）結構上冇膝可屈，呢組指令已移除（見 LegIK.h
+        // solveRollIK() 説明）。
         // 舊長寫法（PITCH_P/PITCH/ROLL_P/ROLL/...）仍然支援，保持向下相容。
         String args = params.substring(spacePos + 1);
         args.trim();
@@ -800,17 +836,8 @@ void processCommand(String cmd) {
           } else if (axis == "KPD" || axis == "KNEE_PITCH_D") {
             balanceGains.kneePitchKd = gainVal;
             Serial1.print(F("BalanceGain KPD(KNEE_PITCH_D) = ")); Serial1.println(gainVal, 3);
-          } else if (axis == "KRP" || axis == "KNEE_ROLL_P") {
-            balanceGains.kneeRollKp = gainVal;
-            Serial1.print(F("BalanceGain KRP(KNEE_ROLL_P) = ")); Serial1.println(gainVal, 3);
-          } else if (axis == "KRI" || axis == "KNEE_ROLL_I") {
-            balanceGains.kneeRollKi = gainVal;
-            Serial1.print(F("BalanceGain KRI(KNEE_ROLL_I) = ")); Serial1.println(gainVal, 3);
-          } else if (axis == "KRD" || axis == "KNEE_ROLL_D") {
-            balanceGains.kneeRollKd = gainVal;
-            Serial1.print(F("BalanceGain KRD(KNEE_ROLL_D) = ")); Serial1.println(gainVal, 3);
           } else {
-            Serial1.println(F("格式錯誤，用法: WALKSET BALANCE <PP|PI|PD|RP|RI|RD|KPP|KPI|KPD|KRP|KRI|KRD> <值>"));
+            Serial1.println(F("格式錯誤，用法: WALKSET BALANCE <PP|PI|PD|RP|RI|RD|KPP|KPI|KPD> <值>"));
           }
         } else {
           Serial1.print(F("PITCH(PP/PI/PD): Kp=")); Serial1.print(balanceGains.pitchKp, 3);
@@ -822,9 +849,6 @@ void processCommand(String cmd) {
           Serial1.print(F("KNEE_PITCH(KPP/KPI/KPD): Kp=")); Serial1.print(balanceGains.kneePitchKp, 3);
           Serial1.print(F(" Ki=")); Serial1.print(balanceGains.kneePitchKi, 3);
           Serial1.print(F(" Kd=")); Serial1.println(balanceGains.kneePitchKd, 3);
-          Serial1.print(F("KNEE_ROLL(KRP/KRI/KRD):  Kp=")); Serial1.print(balanceGains.kneeRollKp, 3);
-          Serial1.print(F(" Ki=")); Serial1.print(balanceGains.kneeRollKi, 3);
-          Serial1.print(F(" Kd=")); Serial1.println(balanceGains.kneeRollKd, 3);
         }
       } else if (paramName == "STRC" || paramName == "SPD" ||
                  paramName == "CUR" || paramName == "TMP") {
@@ -897,9 +921,6 @@ void showHelp() {
   Serial1.println(F("WALKSET BALANCE KPP <值> : 前後傾→膝屈曲 P (預設0，由0.1~0.3試起)"));
   Serial1.println(F("WALKSET BALANCE KPI <值> : 前後傾→膝屈曲 I (預設0)"));
   Serial1.println(F("WALKSET BALANCE KPD <值> : 前後傾→膝屈曲 D (預設0)"));
-  Serial1.println(F("WALKSET BALANCE KRP <值> : 左右傾→膝屈曲 P (預設0)"));
-  Serial1.println(F("WALKSET BALANCE KRI <值> : 左右傾→膝屈曲 I (預設0)"));
-  Serial1.println(F("WALKSET BALANCE KRD <值> : 左右傾→膝屈曲 D (預設0)"));
   Serial1.println(F("\n=== table_walk 步態參數調整 ==="));
   Serial1.println(F("WALKSET             : 顯示目前 LEN/ROLL/PITCH 數值"));
   Serial1.println(F("WALKSET LEN <值>    : 調整抬腳/伸展幅度 (預設140)"));
@@ -1039,52 +1060,70 @@ void loop() {
     imuUpdate();
 
     // ===== Gyro 自動平衡（跟 Bioloid Premium 官方 gyro tutorial 邏輯）=====
-    // 只喺企定（table_walk 冇行緊）先套用，避免同 table_walk 本身嘅
-    // x2/y2 姿態控制（waist yaw 疊加、crouch/lean）互相打架——官方教學
-    // 都係「motion 播放緊先套用 joint offset」，呢度用「冇行走緊」做
-    // 對應嘅企定判斷。
-    if (balanceEnabled && tableWalkIsWalking() == false) {
+    // 而家 WALK 行走中都會套用：table_walk 同 balance 控制緊完全同一批
+    // servo (HV5-HV14)。疊加基準改用 servo->currentTunePos（table_walk
+    // 每個 walk tick 更新一次嘅「純步態目標」）取代 homePosition，等
+    // balance offset 疊喺步態之上、而唔係覆蓋走佢；企定時 currentTunePos
+    // 同 homePosition 相等，行為同之前一致。
+    //
+    // ⚠ 但 balance 送出（基準+offset）之後刻意唔寫返 currentTunePos：
+    // computeBalanceOffsets() 嘅 PID 輸出係「相對呢個乾淨基準嘅絕對
+    // 修正量」（每次由現時實際傾斜度重新計算），唔係增量。如果寫
+    // 返落 currentTunePos，下一個 IMU tick 嘅 offset 會疊落上次已經
+    // 加過嘅殘留之上，不斷累積、唔會收斂。currentTunePos 淨係俾
+    // table_walk 更新，balance 每次都由呢個乾淨基準重新算，唔留低
+    // 自己送出嘅結果。
+    if (balanceEnabled) {
       BalanceOffsets bo;
       float imuDt = IMU_UPDATE_INTERVAL_MS / 1000.0f;  // 50Hz tick，同 imuUpdate() 週期一致
       computeBalanceOffsets(imuData.pitch, imuData.roll,
                              imuData.gyroZ, imuData.gyroX,
                              imuDt, bo);
 
-      ServoInfo *hv5  = findServoByBinaryID(5);   // 右髖側擺
-      ServoInfo *hv6  = findServoByBinaryID(6);   // 左髖側擺
-      ServoInfo *hv7  = findServoByBinaryID(7);   // 右髖前後
-      ServoInfo *hv8  = findServoByBinaryID(8);   // 左髖前後
-      ServoInfo *hv9  = findServoByBinaryID(9);   // 右膝屈伸
-      ServoInfo *hv10 = findServoByBinaryID(10);  // 左膝屈伸
-      ServoInfo *hv11 = findServoByBinaryID(11);  // 右踝前後
-      ServoInfo *hv12 = findServoByBinaryID(12);  // 左踝前後
-      ServoInfo *hv13 = findServoByBinaryID(13);  // 右踝側擺
-      ServoInfo *hv14 = findServoByBinaryID(14);  // 左踝側擺
-
-      if (hv5)  safeSetPos(hv5,  (uint16_t)constrain((int)hv5->homePosition  + bo.hipLRR,   (int)hv5->minAngle,  (int)hv5->maxAngle));
-      if (hv6)  safeSetPos(hv6,  (uint16_t)constrain((int)hv6->homePosition  + bo.hipLRL,   (int)hv6->minAngle,  (int)hv6->maxAngle));
-      if (hv7)  safeSetPos(hv7,  (uint16_t)constrain((int)hv7->homePosition  + bo.hipFBR,   (int)hv7->minAngle,  (int)hv7->maxAngle));
-      if (hv8)  safeSetPos(hv8,  (uint16_t)constrain((int)hv8->homePosition  + bo.hipFBL,   (int)hv8->minAngle,  (int)hv8->maxAngle));
-      if (hv9)  safeSetPos(hv9,  (uint16_t)constrain((int)hv9->homePosition  + bo.kneeFBR,  (int)hv9->minAngle,  (int)hv9->maxAngle));
-      if (hv10) safeSetPos(hv10, (uint16_t)constrain((int)hv10->homePosition + bo.kneeFBL,  (int)hv10->minAngle, (int)hv10->maxAngle));
-      if (hv11) safeSetPos(hv11, (uint16_t)constrain((int)hv11->homePosition + bo.ankleFBR, (int)hv11->minAngle, (int)hv11->maxAngle));
-      if (hv12) safeSetPos(hv12, (uint16_t)constrain((int)hv12->homePosition + bo.ankleFBL, (int)hv12->minAngle, (int)hv12->maxAngle));
-      if (hv13) safeSetPos(hv13, (uint16_t)constrain((int)hv13->homePosition + bo.ankleLRR, (int)hv13->minAngle, (int)hv13->maxAngle));
-      if (hv14) safeSetPos(hv14, (uint16_t)constrain((int)hv14->homePosition + bo.ankleLRL, (int)hv14->minAngle, (int)hv14->maxAngle));
+      // 逐隻 servo：基準取自 currentTunePos（唔受上次 balance 送出
+      // 嘅結果污染），疊加 offset、clamp、送出，但唔寫返 currentTunePos。
+      // 用 table 代替原本 10 行幾乎一樣嘅 if(hvN){...} 重複代碼——
+      // 同一個 pattern（讀 base、加 offset、clamp、safeSetPos、記錄
+      // target）淨係邊個 servo/邊個 offset 唔同，抽出嚟做一個 loop。
+      struct BalHVEntry {
+        ServoInfo *servo;
+        int offset;
+        int target;      // apply 之後填入，俾下面 log/plot 用
+        const char *label;
+      };
+      BalHVEntry hvList[10] = {
+        { findServoByBinaryID(5),  bo.hipLRR,   0, "HV5="  },
+        { findServoByBinaryID(6),  bo.hipLRL,   0, "HV6="  },
+        { findServoByBinaryID(7),  bo.hipFBR,   0, "HV7="  },
+        { findServoByBinaryID(8),  bo.hipFBL,   0, "HV8="  },
+        { findServoByBinaryID(9),  bo.kneeFBR,  0, "HV9="  },
+        { findServoByBinaryID(10), bo.kneeFBL,  0, "HV10=" },
+        { findServoByBinaryID(11), bo.ankleFBR, 0, "HV11=" },
+        { findServoByBinaryID(12), bo.ankleFBL, 0, "HV12=" },
+        { findServoByBinaryID(13), bo.ankleLRR, 0, "HV13=" },
+        { findServoByBinaryID(14), bo.ankleLRL, 0, "HV14=" },
+      };
+      for (uint8_t i = 0; i < 10; i++) {
+        BalHVEntry &e = hvList[i];
+        if (!e.servo) continue;
+        int base = e.servo->currentTunePos;
+        int t = constrain(base + e.offset, (int)e.servo->minAngle, (int)e.servo->maxAngle);
+        safeSetPos(e.servo, (uint16_t)t);
+        e.target = t;
+      }
+      // 注意：呢度刻意冇更新 currentTunePos——原因見上面嘅解釋，
+      // currentTunePos 要保持係 table_walk 送出嘅乾淨基準，等下一個
+      // IMU tick 嘅 balance offset 由呢個乾淨基準重新計算。
 
       if (balanceLogEnabled) {
         Serial1.print(F("[BAL] p=")); Serial1.print(imuData.pitch, 1);
         Serial1.print(F(" r=")); Serial1.print(imuData.roll, 1);
-        if (hv5)  { Serial1.print(F(" HV5="));  Serial1.print((int)hv5->homePosition  + bo.hipLRR); }
-        if (hv6)  { Serial1.print(F(" HV6="));  Serial1.print((int)hv6->homePosition  + bo.hipLRL); }
-        if (hv7)  { Serial1.print(F(" HV7="));  Serial1.print((int)hv7->homePosition  + bo.hipFBR); }
-        if (hv8)  { Serial1.print(F(" HV8="));  Serial1.print((int)hv8->homePosition  + bo.hipFBL); }
-        if (hv9)  { Serial1.print(F(" HV9="));  Serial1.print((int)hv9->homePosition  + bo.kneeFBR); }
-        if (hv10) { Serial1.print(F(" HV10=")); Serial1.print((int)hv10->homePosition + bo.kneeFBL); }
-        if (hv11) { Serial1.print(F(" HV11=")); Serial1.print((int)hv11->homePosition + bo.ankleFBR); }
-        if (hv12) { Serial1.print(F(" HV12=")); Serial1.print((int)hv12->homePosition + bo.ankleFBL); }
-        if (hv13) { Serial1.print(F(" HV13=")); Serial1.print((int)hv13->homePosition + bo.ankleLRR); }
-        if (hv14) { Serial1.print(F(" HV14=")); Serial1.print((int)hv14->homePosition + bo.ankleLRL); }
+        for (uint8_t i = 0; i < 10; i++) {
+          if (!hvList[i].servo) continue;
+          Serial1.print(' ');
+          Serial1.print(hvList[i].label);
+          Serial1.print(hvList[i].target);
+        }
         Serial1.println();
       }
 
@@ -1098,8 +1137,8 @@ void loop() {
       if (balancePlotEnabled) {
         Serial1.print(F("pitch:")); Serial1.print(imuData.pitch, 2);
         Serial1.print(F(",roll:")); Serial1.print(imuData.roll, 2);
-        if (hv5) { Serial1.print(F(",HV5:")); Serial1.print((int)hv5->homePosition + bo.hipLRR); }
-        if (hv7) { Serial1.print(F(",HV7:")); Serial1.print((int)hv7->homePosition + bo.hipFBR); }
+        if (hvList[0].servo) { Serial1.print(F(",HV5:")); Serial1.print(hvList[0].target); }
+        if (hvList[2].servo) { Serial1.print(F(",HV7:")); Serial1.print(hvList[2].target); }
         Serial1.println();
       }
     } else {

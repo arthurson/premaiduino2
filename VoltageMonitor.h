@@ -6,11 +6,11 @@
 
 // ===== 電壓檢查相關定義 =====
 #define VOLTAGE_PIN PA0
-#define VOLTAGE_WARNING 9.5    // 低過此值 = 黃色警告
-#define VOLTAGE_SHUTDOWN 9.0   // 低過此值 = 紅色 + 自動關機
+#define VOLTAGE_WARNING 9.5f    // 低過此值 = 黃色警告
+#define VOLTAGE_SHUTDOWN 9.0f   // 低過此值 = 紅色 + 自動關機
 #define VOLTAGE_CHECK_INTERVAL 10000
 #define VOLTAGE_SAMPLES 10
-#define VOLTAGE_DIVIDER_RATIO 22.9
+#define VOLTAGE_DIVIDER_RATIO 22.9f
 
 // 主檔（Pre-maiduino2.ino）定義，緊急關機時要即停 table_walk
 extern void tableWalkSafeStop();
@@ -44,9 +44,9 @@ inline bool ledManualOverride = false;
 // ===== 電壓檢查函式 =====
 inline void initVoltageCheck() {
   pinMode(VOLTAGE_PIN, INPUT_ANALOG);
-  voltageData.currentVoltage = 0.0;
-  voltageData.minVoltage = 99.0;
-  voltageData.maxVoltage = 0.0;
+  voltageData.currentVoltage = 0.0f;
+  voltageData.minVoltage = 99.0f;
+  voltageData.maxVoltage = 0.0f;
   voltageData.lastCheckTime = 0;
   voltageData.warningActive = false;
   voltageData.shutdownInitiated = false;
@@ -59,7 +59,7 @@ inline float readBatteryVoltage() {
     // [FIX 4] 移除 delay(1)：STM32 ADC 夠快，唔需要等待，省 10ms 阻塞
   }
   float average = (float)sum / VOLTAGE_SAMPLES;
-  float voltageAtPin = (average / 4095.0) * 3.3;
+  float voltageAtPin = (average / 4095.0f) * 3.3f;
   float actualVoltage = voltageAtPin * VOLTAGE_DIVIDER_RATIO;
   return actualVoltage;
 }

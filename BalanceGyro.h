@@ -37,7 +37,18 @@ inline bool balanceEnabled = false;
 // 髖部高度，腳掌要移動幾多先追得返個重心投影」，粗略但合理嘅
 // 起始假設；如果實測跟得唔夠貼／太貼，可以獨立調呢條轉換嘅
 // 比例，唔使動 PID gain 本身。
-#define BALANCE_DEG_TO_MM(deg) ((deg) * (PI / 180.0f) * (float)LEG_LENGTH)
+// Arduino 核心嘅 PI 係 double 常數，直接同 float 混合運算會觸發
+// double promotion（同 LegIK.h/MPU6050IMU.h 修正的原因一致）。
+// 用返 LegIK.h 已經定義嘅 IK_PI_F（float 精度），確保呢條 macro
+// 全程停留喺 float，唔會額外拉入 double soft-float routine。
+//
+// IK_PI_F/180.0f*LEG_LENGTH 呢條純粹係常數（IK_PI_F、LEG_LENGTH
+// 全部係編譯期已知嘅 #define），預先摺埋做一個常數，等
+// BALANCE_DEG_TO_MM 每次展開淨係一個乘法，唔使再做「除法+乘法」
+// 兩步——喺冇 LTO 嘅情況下更保證編譯器會摺晒呢條數，唔留低
+// runtime 除法。
+#define BALANCE_MM_PER_DEG ((IK_PI_F / 180.0f) * (float)LEG_LENGTH)
+#define BALANCE_DEG_TO_MM(deg) ((deg) * BALANCE_MM_PER_DEG)
 
 // ===== PID Gain 參數（可用 WALKSET BALANCE 指令即時調） =====
 // P：跟原本邏輯一樣，gain=1.0 即傾幾多度、個關節就跟住轉幾多度。
@@ -70,9 +81,9 @@ struct BalanceGains {
   float kneePitchKi = 0.0f;
   float kneePitchKd = 0.0f;
 
-  float kneeRollKp = 0.0f;   // 左右傾幅度 → 膝屈曲角度（通常唔太需要，預設 0）
-  float kneeRollKi = 0.0f;
-  float kneeRollKd = 0.0f;
+  // 注意：冇 kneeRollKp/Ki/Kd —— roll 平面（HV5-HV13）結構上冇膝
+  // 可屈（見 LegIK.h solveRollIK() 説明），呢組 gain 算出嚟嘅值
+  // 傳落 computeLegIK() 會被完全忽略，純粹浪費 CPU/flash，已鏟走。
 };
 inline BalanceGains balanceGains;
 
@@ -91,7 +102,6 @@ inline BalanceGains balanceGains;
 inline float pitchIntegral = 0.0f;
 inline float rollIntegral = 0.0f;
 inline float kneePitchIntegral = 0.0f;
-inline float kneeRollIntegral = 0.0f;
 
 // 喺 .ino 度，行走開始/balance 關閉時 call 呢個，確保 I term 唔會
 // 帶住舊嘅、唔相關語境嘅累積誤差入返新一輪企定修正。
@@ -99,7 +109,6 @@ inline void resetBalanceIntegral() {
   pitchIntegral = 0.0f;
   rollIntegral = 0.0f;
   kneePitchIntegral = 0.0f;
-  kneeRollIntegral = 0.0f;
 }
 
 // ===== 方向翻轉開關（實機測試用） =====
@@ -191,32 +200,29 @@ inline void computeBalanceOffsets(float pitch, float roll,
   rollPidDeg *= BALANCE_ROLL_INVERT;
 
   // ---- 膝屈曲 PID：獨立控制 kneeBendDeg（LegIK.h v2 新增輸入）----
-  // 誤差輸入用 |pitch|/|roll|（絕對值）——膝屈曲呢個動作本身冇
-  // 方向性（唔會「向前傾就屈多啲、向後傾就屈少啲」咁分方向），
-  // 淨係「傾斜幅度幾大就屈幾多」，所以食絕對值嚟做誤差量，D
-  // 項用陀螺角速度嘅絕對值做阻尼（傾斜速度越快，膝提早屈多啲
-  // 幫手穩住），gain 預設 0，你可以獨立於 pitch/roll 嗰組整定。
+  // 誤差輸入用 |pitch|（絕對值）——膝屈曲呢個動作本身冇方向性
+  // （唔會「向前傾就屈多啲、向後傾就屈少啲」咁分方向），淨係
+  // 「傾斜幅度幾大就屈幾多」，所以食絕對值嚟做誤差量，D 項用
+  // 陀螺角速度嘅絕對值做阻尼（傾斜速度越快，膝提早屈多啲幫手
+  // 穩住），gain 預設 0。
+  // 注：冇 roll 方向嘅版本——roll 平面（HV5-HV13）結構上冇膝可
+  // 屈，computeLegIK() 嘅 kneeBendRollDeg 參數純粹係函式簽名
+  // 相容，傳 0 即可（見 LegIK.h solveRollIK() 説明）。
   float absPitch = fabsf(pitch);
-  float absRoll = fabsf(roll);
   if (integrateOk) {
     kneePitchIntegral += absPitch * dt;
     kneePitchIntegral = constrain(kneePitchIntegral, 0.0f, BALANCE_INTEGRAL_CLAMP_DEG);
-    kneeRollIntegral += absRoll * dt;
-    kneeRollIntegral = constrain(kneeRollIntegral, 0.0f, BALANCE_INTEGRAL_CLAMP_DEG);
   }
   float kneeBendPitchDeg = absPitch * balanceGains.kneePitchKp
                           + kneePitchIntegral * balanceGains.kneePitchKi
                           + fabsf(gyroPitchRate) * balanceGains.kneePitchKd;
-  float kneeBendRollDeg = absRoll * balanceGains.kneeRollKp
-                         + kneeRollIntegral * balanceGains.kneeRollKi
-                         + fabsf(gyroRollRate) * balanceGains.kneeRollKd;
 
   // ---- PID 輸出角度 → 水平位移 (mm) → IK 反解 ----
-  double dx = BALANCE_DEG_TO_MM(pitchPidDeg);  // 前後位移
-  double dy = BALANCE_DEG_TO_MM(rollPidDeg);   // 左右位移
+  float dx = BALANCE_DEG_TO_MM(pitchPidDeg);  // 前後位移
+  float dy = BALANCE_DEG_TO_MM(rollPidDeg);   // 左右位移
 
   LegIKAngles ik;
-  computeLegIK(dx, dy, kneeBendPitchDeg, kneeBendRollDeg, ik);
+  computeLegIK(dx, dy, kneeBendPitchDeg, 0.0f, ik);
 
   // ---- IK 角度 → pulse offset ----
   out.hipFBR   = ikDegToPulse(ik.hipPitchR);
