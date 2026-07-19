@@ -6,28 +6,16 @@
 
 // ===== Leg IK Solver =====
 // 目的：由 BalanceGyro.h 嘅 PID 輸出（軀幹應該點郁先企返直嘅
-// 控制量），反解做髖、膝、踝三隻關節嘅目標角度，取代舊版
-// LINKDEF 符號表（+1/-1/+2/-2）嗰種「膝完全唔郁、憑經驗比例
-// 分配」嘅做法。
+// 控制量），反解做髖、膝、踝三隻關節嘅目標角度。
 //
-// ---- 設計沿革（重要：呢個 v2 版本修正咗 v1 嘅一個根本錯誤）----
-// v1 嘗試「保持垂直高度固定，淨係水平位移」，但 home 姿態本身
-// 已經接近完全打直（膝彎<10°），打直嘅腿已經係 THIGH+SHIN 嘅
-// 最大伸展長度，冇「額外長度」可以攞嚟做斜向位移，結果數學上
-// reach 一定要 > height，逼到膝角公式撞落 clamp 上限，變成
-// 「膝完全唔郁、修正全部落晒喺髖度」——同冇做 IK 前嘅症狀一樣，
-// 只係換咗個包裝。
+// 輸入「水平位移 offset（mm）」同「膝屈曲角度 kneeBendDeg（度）」
+// 兩個獨立值（分別由 BalanceGyro.h 嘅兩組獨立 PID 提供），用餘弦
+// 定理反解 reach、height、髖角、踝角。offset=0 且 kneeBendDeg=0
+// 精準對應 home 姿態，數學上冇奇異點。
 //
-// v2 做法：唔再假設垂直高度固定，改為將「水平位移 offset」同
-// 「膝屈曲角度 kneeBendDeg」當做兩個獨立輸入（分別由 BalanceGyro.h
-// 嘅兩組獨立 PID 提供），用餘弦定理由呢兩個值直接反解 reach、
-// height、髖角、踝角。數學上冇奇異點（offset=0 且 kneeBendDeg=0
-// 精準對應 home），亦唔使憑空估「膝要屈幾快」呢條無經驗根據嘅
-// 比例常數。
-//
-// 呢層淨係負責「幾何」：輸入 offset（mm）+ kneeBendDeg（度），
-// 輸出關節角度修正量（度，相對 home 姿態）。唔負責讀 IMU、
-// 唔負責 PID 計算，呢啲交返 BalanceGyro.h 做，兩層職責分開。
+// 呢層淨係負責「幾何」：輸入 offset + kneeBendDeg，輸出關節角度
+// 修正量（度，相對 home 姿態）。唔負責讀 IMU、唔負責 PID 計算，
+// 呢啲交返 BalanceGyro.h 做，兩層職責分開。
 
 // ===== IK Solver 常數（2026-07 實機量度，沿腿直線量度各 servo
 //      轉軸之間嘅距離：HV5-HV7-HV9-HV11-HV13-地面）=====
@@ -109,29 +97,22 @@ struct LegIKAngles {
 
 // ---- 內部 helper：單一 sagittal（前後）或 frontal（左右）平面嘅
 //      2-link IK。輸入水平位移 offset（mm）同膝屈曲角度
-//      kneeBendDeg（度，正值=屈曲，0=完全打直），兩者係獨立輸入，
-//      唔互相假設對方嘅值——側移量交俾 pitch/roll PID，屈膝量
-//      交俾另一組獨立 PID，呢層淨係做幾何反解。
+//      kneeBendDeg（度，正值=屈曲，0=完全打直），兩者係獨立輸入
+//      （側移量交俾 pitch/roll PID，屈膝量交俾另一組獨立 PID），
+//      呢層淨係做幾何反解。
 //
-//      幾何簡化（等腰三角形恆等式）：
-//      PITCH_THIGH_LENGTH == PITCH_SHIN_LENGTH（都係 65mm），大腿
-//      同小腿形成等腰三角形，兩條原本要用餘弦定理/acos 先攞到嘅
-//      量有精確閉式解：
+//      幾何簡化（等腰三角形恆等式）：PITCH_THIGH_LENGTH ==
+//      PITCH_SHIN_LENGTH（都係 65mm），大腿同小腿形成等腰三角形，
+//      有精確閉式解：
 //        1) reach = 2·T·|cos(kneeBendDeg/2)|
-//           （由 reach² = 2T²(1+cos(kneeBendDeg)) = 4T²cos²(kneeBendDeg/2)
-//           推出，T=THIGH=SHIN）
 //        2) thighReachAngle = kneeBendDeg / 2
-//           （等腰三角形嘅底角必然係頂角嘅補角一半）
-//      兩條都經 Python 逐點數值驗證（0°~60°），同原本餘弦定理+acos
-//      做法喺 8 位小數內完全一致。呢個簡化將 cos+sqrt+acos 三個
-//      transcendental function call 減到淨係一個 cos，係專為
-//      THIGH==SHIN 呢個特定幾何度身定造，如果將來大腿/小腿長度
-//      唔再相等，呢條簡化式唔再成立，要改返用返通用餘弦定理版本。
+//      （T=THIGH=SHIN，已經 Python 逐點數值驗證 0°~60° 同通用餘弦
+//      定理+acos 做法一致）。呢個簡化將 cos+sqrt+acos 三個
+//      transcendental function call 減到一個 cos，係專為
+//      THIGH==SHIN 呢個特定幾何度身定造，如果將來兩者長度唔再
+//      相等，要改返用通用餘弦定理版本。
 //
-//      height（垂直分量，用嚟計 reachTiltFromVertical）冇閉式簡化
-//      捷徑，因為佢仲要睇 offset（side input），依然要用
-//      sqrt(reach²-offset²)。
-//
+//      height（垂直分量）冇閉式簡化捷徑，仍要用 sqrt(reach²-offset²)。
 //      offset=0 且 kneeBendDeg=0 時，reach=height=THIGH+SHIN，
 //      hipDeg=ankleDeg=0，精準對應 home。
 inline void solve2LinkIK(float offset, float kneeBendDeg,
@@ -177,22 +158,14 @@ inline void solve2LinkIK(float offset, float kneeBendDeg,
 //
 //      踝側擺角：令腳掌保持水平貼地，中間冇其他 roll 關節分薄
 //      呢個轉角，所以補償量就係髖轉角嘅完整反向：
-//      ankleRollDeg = -hipRollDeg（同 solve2LinkIK() 入面
-//      kneeBendClamped=0 個特殊 case 一致，但呢度冇膝呢個
-//      choice，成條式恆常都係咁）。
+//      ankleRollDeg = -hipRollDeg。
 //
-//      offsetY 唔可以喺物理上超過 ROLL_LEVER_LENGTH（否則
-//      atan2 都仲有效，但代表側移量已經超過成隻腳打直側擺
-//      90° 都仲唔夠嘅極端情況），呢度都留返一線 clamp 防止
-//      user 輸入離晒譜嘅數值，同 solve2LinkIK() 做法一致。
-//      注意符號慣例：呢度嘅 ankleRollDeg 要輸出「同 hipRollDeg
-//      反號」（即係 -hipRollDeg），因為 computeLegIK() 出面
-//      仲有一次 out.ankleRollR/L = -ankleR 嘅 negate，兩層夾埋
-//      先等於「最終 ankleRoll 輸出同 hipRoll 同號」——同
-//      solve2LinkIK() 嘅 ankleDeg 輸出慣例（kneeBendDeg=0 特例下
-//      = -hipDeg，出面再 negate 一次變返同 hipDeg 同號）保持一致。
-//      如果呢度輸出同 hipRollDeg 同號，會令兩層 negate 冚唔返，
-//      最終方向會反咗——之前一個修正版本正是咁，已經改返。
+//      offsetY 唔可以喺物理上超過 ROLL_LEVER_LENGTH，呢度留返
+//      一線 clamp 防止輸入離譜數值。
+//
+//      注意符號慣例：呢度輸出嘅 ankleRollDeg 已經係「送去踝關節
+//      嘅局部轉角」（同 hipRollDeg 反號），computeLegIK() 出面
+//      直接原值賦落 out.ankleRollR/L，唔可以再 negate 一次。
 inline void solveRollIK(float offsetY, float &hipRollDeg, float &ankleRollDeg) {
   float leverLimit = ROLL_LEVER_LENGTH - 0.01f;
   float offsetClamped = constrain(offsetY, -leverLimit, leverLimit);
@@ -237,14 +210,10 @@ inline void computeLegIK(float dx, float dy,
 
   // ---- Roll（左右）----
   // Roll 平面淨係得 HV5(髖)/HV13(踝) 兩個獨立轉軸，中間 215mm 係
-  // 固定剛體（冇其他關節分薄角度）。腳掌絕對角度 = hipRollDeg
-  // （剛體傾側嘅角度）+ ankleRollDeg（踝關節局部轉角），要令腳掌
-  // 保持水平（絕對角度=0），踝關節局部轉角必須同 hipRollDeg 反號，
-  // 即 ankleRollDeg = -hipRollDeg——呢個 negate 已經喺 solveRollIK()
-  // 入面做咗，ankleR 呢度已經係「送去踝關節嘅局部轉角」，唔可以
-  // 出面再 negate 多一次（之前試過 out.ankleRollR = -ankleR，
-  // 令兩次 negate 互相抵消，變成同 hipRollR 同號，導致腳掌側傾
-  // 唔貼地——已經改正）。
+  // 固定剛體。腳掌絕對角度 = hipRollDeg（剛體傾側角度）+
+  // ankleRollDeg（踝關節局部轉角），要令腳掌保持水平（絕對角度=0），
+  // ankleRollDeg 必須同 hipRollDeg 反號——呢個 negate 已經喺
+  // solveRollIK() 做咗，呢度直接賦值，唔可以再 negate 多一次。
   out.hipRollR   =  hipR;
   out.hipRollL   =  hipR;
   out.ankleRollR =  ankleR;

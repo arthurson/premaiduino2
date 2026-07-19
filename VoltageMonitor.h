@@ -56,7 +56,7 @@ inline float readBatteryVoltage() {
   uint32_t sum = 0;
   for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
     sum += analogRead(VOLTAGE_PIN);
-    // [FIX 4] 移除 delay(1)：STM32 ADC 夠快，唔需要等待，省 10ms 阻塞
+    // STM32 ADC 夠快，唔需要 delay(1) 等待，省 10ms 阻塞
   }
   float average = (float)sum / VOLTAGE_SAMPLES;
   float voltageAtPin = (average / 4095.0f) * 3.3f;

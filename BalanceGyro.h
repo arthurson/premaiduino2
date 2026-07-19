@@ -9,13 +9,9 @@
 // joint offset 疊加落 homePosition、UseGyro 總開關、企定先套用）。
 //
 // 「幾多修正」由 PID 計（見下面 BalanceGains），「點樣分配落各關節」
-// 由 LegIK.h 嘅 ankle strategy 全鏈 IK 反解（髖-膝-踝三關節），
-// 取代舊版憑 table_walk.c LINKDEF_PITCH/LINKDEF_ROLL 符號表（+1/-1/
-// +2/-2）嘅比例分配寫法——舊寫法嘅符號表本身係嚟自「行走波形」
-// 語境、膝完全唔郁，喺呢度只做企定小角度修正時夠用，但冇幾何
-// 保證；而家用 IK 令膝主動配合屈伸，關節之間嘅角度關係由腿部
-// 幾何（THIGH_LENGTH/SHIN_LENGTH/ANKLE_HEIGHT，見 LegIK.h）算出，
-// 唔再係人手湊嘅比例。
+// 由 LegIK.h 嘅 ankle strategy 全鏈 IK 反解（髖-膝-踝三關節）——
+// 膝主動配合屈伸，關節之間嘅角度關係由腿部幾何
+// （THIGH_LENGTH/SHIN_LENGTH/ANKLE_HEIGHT，見 LegIK.h）算出。
 //
 // 呢個模組只負責「算 offset」，唔負責送 servo——由呼叫方（.ino）
 // 攞返呢啲 offset 之後，加落 homePosition 度，再用 safeSetPos() 送出去，
@@ -27,26 +23,18 @@
 inline bool balanceEnabled = false;
 
 // ===== PID 輸出 → 水平位移換算 =====
-// 舊版做法：PID 輸出嘅「度」直接乘 BALANCE_PULSE_PER_DEGREE 變 pulse，
-// 冇經過任何幾何。而家改為 ankle strategy：PID 輸出嘅「度」睇成
-// 「軀幹想歪返嘅角度」，用小角度近似 (offset ≈ LEG_LENGTH * tan(θ) ≈
-// LEG_LENGTH * θ_rad) 轉做「腳應該喺水平面移動幾多 mm」嚟抵消，
-// 然後先交俾 LegIK.h 反解關節角度。
+// PID 輸出嘅「度」睇成「軀幹想歪返嘅角度」，用小角度近似
+// (offset ≈ LEG_LENGTH * tan(θ) ≈ LEG_LENGTH * θ_rad) 轉做
+// 「腳應該喺水平面移動幾多 mm」嚟抵消，然後交俾 LegIK.h 反解
+// 關節角度。
 //
-// 用 LEG_LENGTH（腿總長）做槓桿臂長度，係假設「軀幹重心大約喺
-// 髖部高度，腳掌要移動幾多先追得返個重心投影」，粗略但合理嘅
-// 起始假設；如果實測跟得唔夠貼／太貼，可以獨立調呢條轉換嘅
+// 用 LEG_LENGTH（腿總長）做槓桿臂長度，假設軀幹重心大約喺
+// 髖部高度；如果實測跟得唔夠貼／太貼，可以獨立調呢條轉換嘅
 // 比例，唔使動 PID gain 本身。
-// Arduino 核心嘅 PI 係 double 常數，直接同 float 混合運算會觸發
-// double promotion（同 LegIK.h/MPU6050IMU.h 修正的原因一致）。
-// 用返 LegIK.h 已經定義嘅 IK_PI_F（float 精度），確保呢條 macro
-// 全程停留喺 float，唔會額外拉入 double soft-float routine。
-//
-// IK_PI_F/180.0f*LEG_LENGTH 呢條純粹係常數（IK_PI_F、LEG_LENGTH
-// 全部係編譯期已知嘅 #define），預先摺埋做一個常數，等
-// BALANCE_DEG_TO_MM 每次展開淨係一個乘法，唔使再做「除法+乘法」
-// 兩步——喺冇 LTO 嘅情況下更保證編譯器會摺晒呢條數，唔留低
-// runtime 除法。
+// 用 LegIK.h 已定義嘅 IK_PI_F（float 精度，非 Arduino 核心嘅
+// double PI），確保全程停留喺 float，唔拉入 double soft-float
+// routine。IK_PI_F/180.0f*LEG_LENGTH 都係編譯期常數，預先摺埋
+// 等 BALANCE_DEG_TO_MM 每次展開淨係一個乘法。
 #define BALANCE_MM_PER_DEG ((IK_PI_F / 180.0f) * (float)LEG_LENGTH)
 #define BALANCE_DEG_TO_MM(deg) ((deg) * BALANCE_MM_PER_DEG)
 
@@ -58,9 +46,7 @@ inline bool balanceEnabled = false;
 //    唔對 pitch/roll 做數值微分——差分本身會放大雜訊，陀螺讀數
 //    本身已經係「現成、乾淨」嘅角速度，直接用更穩。
 //    D 項嘅作用：傾斜「正在快速惡化」時提早加大修正、
-//    「傾斜正在自行變好」時提早減力，抑制原本純 P 版本
-//    嘅 overshoot / 持續震盪（見舊 comment 提到嘅病徵：讀數持續
-//    單方向爬升，撞到 servo 角度上限）。
+//    「傾斜正在自行變好」時提早減力，抑制純 P 嘅 overshoot / 持續震盪。
 struct BalanceGains {
   float pitchKp = 0.5f;   // 前後傾 P：誤差角度 → 髖前後 + 踝前後（經 IK 反解）
   float pitchKi = 0.0f;   // 前後傾 I：預設 0，穩定後先慢慢加（建議由 0.01 開始試）
@@ -70,20 +56,16 @@ struct BalanceGains {
   float rollKi = 0.0f;    // 左右傾 I：預設 0
   float rollKd = 0.0f;    // 左右傾 D：用 gyroX 阻尼，預設 0
 
-  // ---- 膝屈曲獨立 PID（LegIK.h v2 新增，控制 kneeBendDeg）----
-  // 呢組 PID 同上面 pitch/roll 嗰兩組食緊同一個誤差訊號
-  // （|pitch|/|roll|，用絕對值——膝屈曲唔分「向邊個方向」，
-  // 淨係「傾斜幅度大就屈多啲」），但用獨立 gain，等你可以
-  // 分開整定「側移跟得幾貼」同「膝屈得幾快」。預設全部 0，
-  // 即 kneeBendDeg 恆常 0（等同完全打直，同冇呢組 PID 之前
-  // 行為一致），逐步加大先開始見到膝主動屈曲。
+  // ---- 膝屈曲獨立 PID（控制 kneeBendDeg）----
+  // 誤差訊號用 |pitch|（絕對值——膝屈曲唔分方向，淨係「傾斜幅度
+  // 大就屈多啲」），獨立 gain 可以分開整定「側移跟得幾貼」同
+  // 「膝屈得幾快」。預設全部 0（kneeBendDeg 恆常 0，等同完全打直）。
   float kneePitchKp = 0.0f;  // 前後傾幅度 → 膝屈曲角度（建議由 0.1~0.3 開始試）
   float kneePitchKi = 0.0f;
   float kneePitchKd = 0.0f;
 
   // 注意：冇 kneeRollKp/Ki/Kd —— roll 平面（HV5-HV13）結構上冇膝
-  // 可屈（見 LegIK.h solveRollIK() 説明），呢組 gain 算出嚟嘅值
-  // 傳落 computeLegIK() 會被完全忽略，純粹浪費 CPU/flash，已鏟走。
+  // 可屈（見 LegIK.h solveRollIK() 説明）。
 };
 inline BalanceGains balanceGains;
 
@@ -134,9 +116,8 @@ inline bool balanceLogEnabled = false;
 inline bool balancePlotEnabled = false;
 
 // ===== 計算結果 =====
-// 由舊版 8 個（髖x4+踝x4）擴充做 12 個，加返兩隻膝關節——全鏈
-// hip-knee-ankle IK 需要膝主動屈伸先做到「軀幹水平位移、垂直
-// 高度不變」，唔再係「膝完全唔郁」嗰個舊假設。
+// hip-knee-ankle 全鏈 IK，膝主動屈伸做到「軀幹水平位移、垂直
+// 高度不變」。
 struct BalanceOffsets {
   int hipFBR;    // 右髖前後 (HV7)
   int hipFBL;    // 左髖前後 (HV8)
@@ -159,9 +140,7 @@ struct BalanceOffsets {
 // 但傳實際量度值而唔係寫死常數，可以避免 loop 偶爾延遲時 I term 算錯。
 //
 // 內部流程：PID（誤差角度 → 控制輸出角度）→ 換算做水平位移 mm →
-// LegIK.h 反解做髖/膝/踝角度 → 轉返做 pulse offset。PID gain 嘅
-// 意義冇變（仍然係「傾幾多度、輸出幾多度嘅修正」），改嘅淨係
-// 「呢個修正點樣分配落關節」，由符號表改做幾何反解。
+// LegIK.h 反解做髖/膝/踝角度 → 轉返做 pulse offset。
 inline void computeBalanceOffsets(float pitch, float roll,
                                    float gyroPitchRate, float gyroRollRate,
                                    float dt, BalanceOffsets &out) {

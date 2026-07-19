@@ -20,6 +20,8 @@
 //   - isFreeMode（全域變數）
 //   - tableWalker（tw_walker_t）, tableWalkIsWalking(), tw_walker_init()
 //   - moveAllServosToHome()（forward-declare 都得，實際定義喺 .ino）
+//   - voltageData（VoltageMonitor.h 嘅 VoltageData 實例，0x01 電壓
+//     查詢用；必須喺 include 呢個檔案之前已經 #include "VoltageMonitor.h"）
 
 // =========================================================
 // ===== .pma / ICS binary 封包播放器 =====
@@ -125,11 +127,9 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
 // ===== STM32 內部 Flash 底層讀寫（motion storage 專用） =====
 // =========================================================
 // STM32F102CBT6 (128KB Flash)，page size = 1024 bytes（medium-density
-// devices）。喺 Flash 尾部劃一個 40KB 嘅 motion storage 區
-// （2026-07 由原裝 60-page 上限縮細到 40 page——實測 10 個 .pma 檔案
-// 總共淨係 39.x KB，60KB 太多浪費咗約 20KB 本可以留俾 code 用嘅
-// flash space），用固定地址（Flash 尾 40KB），因為標準 STM32duino
-// linker script 冇提供 "code end" 符號畀我哋自動計。
+// devices）。喺 Flash 尾部劃一個 40KB 嘅 motion storage 區，用固定
+// 地址（Flash 尾 40KB），因為標準 STM32duino linker script 冇提供
+// "code end" 符號畀我哋自動計。
 // 只要 firmware .bin 大細冇超過 88KB（128KB - 40KB），呢個劃法
 // 就唔會同 code 重疊（Arduino IDE 編譯完會顯示 "Sketch uses xxx
 // bytes"，要細過 90112 bytes 先安全）。
@@ -142,10 +142,10 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
 #define STM32_FLASH_BASE            0x08000000UL
 #define STM32_FLASH_TOTAL_SIZE      (128UL * 1024UL)   // 128KB chip
 #define MOTION_FLASH_PAGE_SIZE      1024u               // 1 page = 1KB，跟原裝協議一致
-#define MOTION_FLASH_PAGE_COUNT     40u                 // 2026-07 由 60 縮到 40（實測10個.pma共39.x KB）
+#define MOTION_FLASH_PAGE_COUNT     40u
 #define MOTION_FLASH_RESERVED_SIZE  (MOTION_FLASH_PAGE_COUNT * MOTION_FLASH_PAGE_SIZE)  // 40KB
 #define MOTION_FLASH_START_ADDR     (STM32_FLASH_BASE + STM32_FLASH_TOTAL_SIZE - MOTION_FLASH_RESERVED_SIZE)
-// = 0x08000000 + 0x20000 - 0xA000 = 0x08016000
+// = 0x08016000
 
 // 每個 page 一份 1024-byte 嘅 SRAM staging buffer：host 用
 // WriteMotionData 逐 128-byte 寫入呢度，收齊一個 page 先用
@@ -170,32 +170,19 @@ static bool motionFlashProgramPage(uint8_t pageIndex, const uint8_t *data1024) {
   if (pageIndex >= MOTION_FLASH_PAGE_COUNT) return false;
   uint32_t pageAddr = motionFlashPageAddr(pageIndex);
 
-  // ⚠⚠⚠ 致命 bug 修正：Flash erase/program 期間必須關閉中斷！
+  // ⚠ Flash erase/program 期間必須關閉中斷：HAL_FLASHEx_Erase()/
+  // HAL_FLASH_Program() 執行緊嗰陣，Flash controller 會鎖死，CPU
+  // 冧可以由 Flash 讀取任何指令（包括中斷向量表/ISR code）。如果
+  // 呢段時間有中斷觸發（最大嫌疑：UART RX interrupt），CPU 跳去
+  // interrupt handler 攞指令但讀唔到，會 bus fault/hard fault，
+  // 甚至寫壞緊嘅 Flash sector（可能波及 bootloader 或主程式
+  // code），令晶片開唔到機，要重新燒錄先返生。用
+  // __disable_irq()/__enable_irq() 包住成個 erase+program 過程，
+  // 確保唔會被中斷打斷。
   //
-  // 已知事故：用 .pma 上傳功能之後，機械人熄機後開唔返機，一定要
-  // 重新燒錄 .ino 先返生——呢個係 STM32 Flash 損壞嘅典型徵狀。
-  //
-  // 根本原因：HAL_FLASHEx_Erase()/HAL_FLASH_Program() 執行緊嗰陣，
-  // STM32 嘅 Flash controller 會鎖死，CPU 冧可以由 Flash 讀取任何
-  // 指令 (包括中斷向量表同 ISR code 本身)。如果呢段時間之內有任何
-  // 中斷觸發 (最大嫌疑：Serial1/Serial2/Serial3 嘅 UART RX interrupt，
-  // 藍牙隨時會送嘢入嚟)，CPU 會嘗試跳去 interrupt handler 攞指令，
-  // 但 Flash 呢刻讀唔到，會導致 bus fault / hard fault，甚至令個
-  // erase/program operation 半途而廢，寫壞緊 Flash sector 本身
-  // (包括可能波及 bootloader 跳轉表或者主程式 code 所在嘅 sector，
-  // 視乎 STM32F103CB 實際 sector 對齊情況)，令個晶片「開唔到機」。
-  //
-  // 呢個 race condition 平時可能好少中招 (UART interrupt 啱啱好喺
-  // 呢幾百微秒窗口觸發嘅機率細)，但只要中招一次就係災難性、不可逆
-  // 嘅後果 (要重新燒錄先返生)，唔可以淨係靠「機率低」去接受呢個
-  // 風險，一定要用 __disable_irq()/__enable_irq() 包住成個
-  // erase+program 過程，確保呢段時間內CPU唔會被任何中斷打斷。
-  //
-  // 副作用：關閉中斷期間，UART RX 會停止接收 (硬件 FIFO 通常有
-  // 幾個 byte 緩衝，短時間關閉中斷不會丟失資料，但如果 erase+
-  // program 耗時過長 (STM32F1 page erase 通常 20ms 左右，1024 bytes
-  // program 通常額外幾ms)，對方持續送資料有機會溢出硬件FIFO。
-  // 呢個風險遠細過「Flash損壞要重新燒錄」，屬於可接受嘅取捨。
+  // 副作用：關閉中斷期間 UART RX 停止接收（硬件 FIFO 短時間緩衝
+  // 通常夠用，除非 erase+program 耗時過長），風險遠細過 Flash
+  // 損壞，屬可接受取捨。
   __disable_irq();
 
   HAL_FLASH_Unlock();
@@ -421,11 +408,20 @@ static void motionPlaybackStop() {
 #define MOTION_ERR_COUNT     0x10
 #define MOTION_ERR_FLASH     0x80
 
+// 共用 helper：對 buf[0..len-2] 做 XOR checksum，寫入 buf[len-1]，
+// 再經 Serial1 送出成個 buf[0..len-1]。封包尾 byte=checksum 呢個
+// pattern喺 sendFlashResponse4/handleReadFlashBuffer/
+// pmaHandleQueryServoInfo 三處重複，抽出嚟做一個共用 function。
+static void sendWithXorChecksum(uint8_t *buf, uint16_t len) {
+  uint8_t xorCalc = 0;
+  for (uint16_t i = 0; i < len - 1; i++) xorCalc ^= buf[i];
+  buf[len - 1] = xorCalc;
+  Serial1.write(buf, len);
+}
+
 static void sendFlashResponse4(uint8_t cmd, uint8_t errorBitmask) {
-  uint8_t resp[4];
-  resp[0] = 4; resp[1] = cmd; resp[2] = errorBitmask;
-  resp[3] = resp[0] ^ resp[1] ^ resp[2];
-  Serial1.write(resp, 4);
+  uint8_t resp[4] = { 4, cmd, errorBitmask, 0 };
+  sendWithXorChecksum(resp, 4);
 }
 
 // 記住「而家傳輸緊嘅係邊個 motionId」——由 handleWriteMotionId 喺
@@ -482,10 +478,7 @@ static void handleReadFlashBuffer(const uint8_t *payload, uint8_t payloadLen) {
                       // 因為 8-bit LEN byte 表達唔到 1028）
   respBuf[1] = 0x1C;
   motionFlashRead((uint32_t)page * MOTION_FLASH_PAGE_SIZE, respBuf + 2, MOTION_FLASH_PAGE_SIZE);
-  uint8_t xorCalc = 0;
-  for (uint16_t i = 0; i < MOTION_FLASH_PAGE_SIZE + 2; i++) xorCalc ^= respBuf[i];
-  respBuf[MOTION_FLASH_PAGE_SIZE + 2] = xorCalc;
-  Serial1.write(respBuf, MOTION_FLASH_PAGE_SIZE + 3);
+  sendWithXorChecksum(respBuf, MOTION_FLASH_PAGE_SIZE + 3);
 }
 
 static void handleWriteMotionId(const uint8_t *payload, uint8_t payloadLen) {
@@ -562,6 +555,131 @@ static void handleStartMotion(const uint8_t *payload, uint8_t payloadLen) {
   sendFlashResponse4(0x1F, MOTION_ERR_NONE);
 }
 
+// =========================================================
+// ===== 0x01：讀取內部變數（監視／查詢）=====
+// =========================================================
+// 依據社群解析メモ「01コマンド詳細」／「一覧表」兩個工作表逆解
+// 出嚟嘅官方協議，格式：
+//   要求：[LEN=07][CMD=01][00][引數1][引數2][回覆長度LEN][checksum]
+//   回覆：因應引數1 而不同，見下面各 sub-handler 註解。
+//
+// 呢個 command 原本淨係 Unity/官方 App／pMaitPlay.exe 用嚟定期
+// 監視機體狀態（pMaitPlay.exe 嘅 timerPower 每 10 秒送一次
+// "07 01 00 02 00 02 06" 查電壓）。你隻 firmware 之前只有
+// receive-side 嘅 binary-detect 集合包含咗 0x01（見
+// pmaReceiveUpdate() 嘅 isPmaCmd 判斷），但 pmaExecutePacket()
+// 本身冇實現任何 0x01 handler，收到會直接落去「已知但唔處理」
+// 嗰個 fall-through，靜靜哋冇回覆。而家補返呢一截，等原裝 App／
+// pMaitPlay.exe 都可以查到你隻自製機嘅電量同伺服狀態。
+//
+// 只實現咗 xlsx 已經解讀出嚟、有實際意義嘅兩個 sub-command
+// （0x02=電壓、0x05=伺服資訊）；其餘 sub-command（0x00/0x01/
+// 0x03/0x04/0x06/0x07）喺原廠都仲未完全解讀（回覆固定值或者
+// 用途未知嘅內部變數），冇連接你嘅硬件任何實際狀態，所以冇實現，
+// 收到會直接冇回覆（同「未知 CMD」一致嘅保守做法）。
+
+// ---- 0x02：HV 電壓查詢 ----
+// 回覆：[LEN=06][CMD=01][00][rawLo][rawHi][checksum]
+// 電壓(V) = raw / 216.0（xlsx 實測平均值喺 215.3~217.2 之間浮動，
+// 216 係官方/社群公用嘅預設換算常數，同 pMaitPlay.exe 反編譯
+// 出嚟嘅 PushRcvCmd() 用嘅除數一致）。
+//
+// 你隻機用緊嘅係 PA0 分壓 ADC（VoltageMonitor.h，
+// VOLTAGE_DIVIDER_RATIO=22.9），同官方協議呢條 216 完全係唔同
+// 硬件量測路徑，兩者冇任何算式關係——呢度純粹係將你已經量到嘅
+// 真實電壓，反推一個「假設用官方比例會讀到幾多」嘅 raw 值，
+// 令回覆封包格式同官方一致，等 pMaitPlay.exe/Unity 端可以直接
+// 顯示啱嘅電壓數字，而唔使理解你內部用緊另一種 ADC 換算方式。
+static void pmaHandleQueryVoltage() {
+  uint16_t raw = (uint16_t)(voltageData.currentVoltage * 216.0f + 0.5f);
+  uint8_t resp[6];
+  resp[0] = 6;
+  resp[1] = 0x01;
+  resp[2] = 0x00;
+  resp[3] = (uint8_t)(raw & 0xFF);        // rawLo
+  resp[4] = (uint8_t)((raw >> 8) & 0xFF); // rawHi
+  resp[5] = resp[0] ^ resp[1] ^ resp[2] ^ resp[3] ^ resp[4];
+  Serial1.write(resp, 6);
+}
+
+// ---- 0x05：伺服資訊查詢（單一 ID）----
+// 要求 payload：[引數1=05][引數2=目標pma-style ID]
+// （xlsx 話 LEN 用 14 嘅倍數可以一次過攞多個連續 ID，但呢個
+// 「連續區塊一次過讀」係假設伺服狀態儲存喺一段連續記憶體，
+// 你隻 firmware 嘅 servoList[] 唔一定同 pma ID 順序連續排列
+// -- 見 findServoByPmaId() 嘅 HV/MV 分段換算 -- 貿然照抄「一次
+// 過畀幾嚿」會讀錯落隔籬伺服，所以呢度保守咁淨係實現「一次查
+// 一隻」，host 想查多隻就分開幾次 0x01 request，行為上同官方
+// 協議完全相容（官方 App 本身都可以逐隻查），淨係冇官方嗰個
+// batch 捷徑。
+//
+// 回覆：[LEN][CMD折返=01][完成狀態=00][14-byte 伺服資訊][checksum]
+// 14-byte 內容完全跟返 xlsx「01コマンド詳細」右側逐 byte 解構：
+//   +00 伺服ID (pma-style, 1~0x27)
+//   +01 有效旗標：0x80=有效／0x00=無效
+//   +02..03 編碼器值（目前實際位置，LE）—— 用 currentTunePos
+//   +04..05 Trim值（機體固有校正，2的補數）—— 我哋冇獨立 trim
+//           概念，homePosition 已經包含咗呢個校正，故填 0
+//   +06..07 指令值（收到嘅目標角度，脫力=0 或 3500~11000 範圍）
+//           —— 同樣用 currentTunePos，因為你隻 firmware 冇分開
+//           保存「指令值」同「編碼器值」兩個獨立狀態
+//   +08..09 陀螺方向旗標：FF FF=不適用／02 05=pitch／02 07=roll
+//           —— 淨係 HV5-14 呢類走路/平衡相關伺服先有意義，其餘
+//           填 FF FF（不適用）
+//   +0A..0B 陀螺倍率（2的補數）—— 你隻 firmware 冇呢個概念，填 0
+//   +0C 速度(Speed)：0x00~0x7F，未接線=0
+//   +0D 拉伸(Stretch)：0x00~0x7F
+static void pmaHandleQueryServoInfo(uint8_t pmaId) {
+  ServoInfo *servo = findServoByPmaId(pmaId);
+
+  uint8_t body[14];
+  body[0] = pmaId;
+  body[1] = (servo && servo->enabled) ? 0x80 : 0x00;
+
+  uint16_t pos = servo ? servo->currentTunePos : 0;
+  body[2] = (uint8_t)(pos & 0xFF);
+  body[3] = (uint8_t)((pos >> 8) & 0xFF);
+
+  body[4] = 0x00;  // trim（冇獨立保存，homePosition 已內含校正）
+  body[5] = 0x00;
+
+  body[6] = body[2];  // 指令值：同編碼器值一致（冇分開保存兩種狀態）
+  body[7] = body[3];
+
+  body[8] = 0xFF;  // 陀螺方向旗標：預設不適用
+  body[9] = 0xFF;
+  body[10] = 0x00; // 陀螺倍率：冇此概念，填0
+  body[11] = 0x00;
+
+  body[12] = servo ? (servo->currentSpeed & 0x7F) : 0x00;
+  body[13] = 0x00;  // stretch：你隻 firmware 冇獨立保存 stretch 狀態
+
+  uint8_t resp[3 + 14 + 1];
+  uint8_t totalLen = 3 + 14 + 1;
+  resp[0] = totalLen;
+  resp[1] = 0x01;  // CMD 折返
+  resp[2] = 0x00;  // 完成狀態：0=成功（未搵到 servo 都當「查詢完成」，
+                    // enabled旗標=0x00 已經表達咗「呢個ID冇嘢」）
+  memcpy(resp + 3, body, 14);
+  sendWithXorChecksum(resp, totalLen);
+}
+
+// ---- 0x01 總 dispatcher：payload[0]=引數1, payload[1]=引數2 ----
+static void pmaHandleCmd01(const uint8_t *payload, uint8_t payloadLen) {
+  if (payloadLen < 2) return;
+  uint8_t arg1 = payload[0];
+  uint8_t arg2 = payload[1];
+
+  if (arg1 == 0x02 && arg2 == 0x00) {
+    pmaHandleQueryVoltage();
+  } else if (arg1 == 0x05) {
+    pmaHandleQueryServoInfo(arg2);
+  }
+  // 其餘 sub-command（accel/gyro/WORD變數/DWORD變數等）未實現，
+  // 冇對應你隻 firmware 任何實際狀態，故意唔回覆——同「未知 CMD」
+  // 一致嘅保守做法，等日後真係需要先再逐個補。
+}
+
 // 執行一個已經收齊、通過 checksum 驗證嘅封包
 static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlayback) {
   uint8_t cmd = pkt[1];
@@ -574,6 +692,16 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
   }
   if (cmd == 0x19) {
     pmaHandleCmd19(payload, payloadLen);
+    return;
+  }
+  if (cmd == 0x01) {
+    // 監視／查詢類指令喺 Flash playback 過程中冇意義（見下面
+    // fromFlashPlayback 判斷嘅解釋），但同 0x18/0x19 一樣，係
+    // 「隨時可以由 host 主動查詢」嘅指令，唔受 fromFlashPlayback
+    // 隔離規則影響——只要唔係嚟自 Flash playback engine 就處理。
+    if (!fromFlashPlayback) {
+      pmaHandleCmd01(payload, payloadLen);
+    }
     return;
   }
 
@@ -609,22 +737,14 @@ static void pmaExecutePacket(const uint8_t *pkt, uint8_t len, bool fromFlashPlay
 // 由 loop() 每次 iteration call 一次；逐 byte 儲入 buffer，
 // 儲夠一個完整封包先驗 checksum 同執行，然後重置去等下一個封包。
 void pmaReceiveUpdate() {
-  // 注意：呢度故意唔用 "while (Serial1.available() > 0)" 一路清到冧晒為止。
-  //
-  // 根本原因：一個 0x18 封包最多可以帶 21 隻 servo，pmaExecutePacket()
-  // 會逐隻 servo 真實做 ICS bus 讀寫（半雙工 + 10ms timeout + retry-once），
-  // 21 隻走完隨時要 20~40ms。如果呢段時間內 sender 端（例如網頁版 BT
-  // sender）已經連續送緊下一個封包嘅 byte，STM32 硬件 UART RX FIFO
-  // 得幾個 byte 深，好快爆滿，導致中間 byte 被丟棄或者覆蓋。
-  //
-  // 一旦漏咗一個 byte，狀態機可能停留喺 PMA_RECV_BODY 永久等一個
-  // 唔會再嚟嘅 byte（因為 pmaPktFilled 永遠追唔上 pmaPktLen），
-  // 令機械人「行到一半完全定住」——呢個唔係死機，而係 UART 協議層面
-  // 卡死，冇任何 ASCII 指令可以打斷佢，睇落好似要重開電源先解決。
-  //
-  // 修法：每次 call pmaReceiveUpdate() 最多完整處理一個 packet 就
-  // return，將處理 servo write 嘅時間攤分返去下一次 loop() iteration，
-  // 中間畀 UART 硬件 FIFO 有機會被清走，避免爆 buffer。
+  // 注意：呢度故意唔用 "while (Serial1.available() > 0)" 一路清到冧晒。
+  // 一個 0x18 封包最多帶 21 隻 servo，pmaExecutePacket() 逐隻做 ICS
+  // bus 讀寫，21 隻走完可能要 20~40ms。如果呢段時間 sender 持續送
+  // 緊下一個封包，STM32 UART RX FIFO 好快爆滿、中間 byte 被丟棄，
+  // 令狀態機永久卡喺 PMA_RECV_BODY 等一個唔會再嚟嘅 byte（機械人
+  // 行到一半定住，要重開電源）。
+  // 修法：每次 call 最多處理一個 packet 就 return，將 servo write
+  // 時間攤分去下一次 loop() iteration，畀 UART FIFO 有機會被清走。
   uint8_t packetsProcessedThisCall = 0;
   const uint8_t MAX_PACKETS_PER_CALL = 1;
 
@@ -635,22 +755,16 @@ void pmaReceiveUpdate() {
       // 判斷呢個 byte 係咪合理嘅 .pma 封包 LEN：要睇多一個 byte（CMD）
       // 先可以確定，因為單靠一個 byte 嘅數值範圍會同 ASCII 指令撞埋。
       //
-      // 特殊例外：如果呢個 byte 本身就係 '\n'，一定要即刻處理，唔可以
-      // 等第二個 byte 先算——因為 '\n' 代表一句 ASCII 指令已經完整，
-      // 如果卡住唔處理，佢會一直等到 *下一次* send 嘅第一個字元一齊
-      // 到達先被消耗，造成「指令要打兩次先有反應」。
-      //
-      // 但除咗 '\n' 之外嘅其他情況（例如 binary 封包啱啱好逐 byte
-      // 到達，第一個 byte 啱啱好係 LEN），唔可以貿然假設佢係 ASCII
-      // 就即刻消耗咗——試過呢種寫法，會令逐 byte 到達嘅 0x18 封包
-      // 成個都被拆散當 ASCII 字元吞晒，令 Unity/PC 端完全冧唔到任何
-      // binary 封包。所以除 '\n' 外一律維持保守，等夠 2 個 byte 先判斷。
+      // 例外：'\n' 要即刻處理，唔等第二個 byte——'\n' 代表一句 ASCII
+      // 指令已完整，卡住唔處理會令指令要打兩次先有反應。除 '\n' 外
+      // 一律保守咁等夠 2 個 byte 先判斷，避免逐 byte 到達嘅 binary
+      // 封包被拆散當 ASCII 字元吞晒。
       if (Serial1.available() < 2) {
         if (b == '\n') {
           Serial1.read();
-          inputBuffer += '\n';
+          inputBufferAppend('\n');
           processCommand(inputBuffer);
-          inputBuffer = "";
+          inputBufferClear();
         }
         return;  // 唔係 '\n'：保留呢個 byte 唔讀，等下次 loop() 儲夠 2 個先判斷
       }
@@ -668,16 +782,6 @@ void pmaReceiveUpdate() {
       // 05=停止 07=迴圈終點 15/17=PMA專用 18=多軸角度 19=Speed/Stretch
       // 1C=ReadFlashBuffer 1D=WriteMotionData 1E=SaveMotionData/LED控制
       // 1F=StartMotion/StopMotion/播放已存動作
-      // 漏咗 0x01 曾經令 Unity 嘅 RequestBatteryRemain()（07 01 00 02
-      // 00 02 06，每 10 秒定時發一次）被誤判做 ASCII 字元塞入
-      // inputBuffer，污染咗接收狀態，係之前「連續送信一開就冇反應」嘅
-      // 根本原因。
-      //
-      // 2026-07 補充：加入 Flash-based motion 協議之後，發現 0x1D
-      // (WriteMotionData) 冇被列入呢個集合，導致成份 134-byte 嘅
-      // WriteMotionData 封包完全冧唔到 binary 判斷，被逐 byte 當做
-      // ASCII 字元塞入 inputBuffer，令機械人隨機郁咗然後卡死——
-      // 呢個係「上傳未完成就郁咗一下就停」呢個徵狀嘅根本原因。
       bool isPmaCmd = (secondByte == 0x01 || secondByte == 0x02 ||
                        secondByte == 0x04 || secondByte == 0x05 ||
                        secondByte == 0x07 || secondByte == 0x15 ||
@@ -693,10 +797,10 @@ void pmaReceiveUpdate() {
       } else {
         // 唔係 binary 封包，peekLen 呢個 byte 其實係普通 ASCII 字元
         char c = (char)peekLen;
-        inputBuffer += c;
+        inputBufferAppend(c);
         if (c == '\n') {
           processCommand(inputBuffer);
-          inputBuffer = "";
+          inputBufferClear();
         }
         pmaPktFilled = 0;  // 復位，冇進入 binary 模式
       }
@@ -734,23 +838,13 @@ void pmaReceiveUpdate() {
         packetsProcessedThisCall++;  // 呢個 packet（可能耗時 20~40ms）處理完，
                                       // 即刻 return 返去 loop()，等 UART FIFO 有機會被清
 
-        // 回送 1-byte ACK：0x06（ASCII ACK）代表呢個 packet 已經完整
-        // 執行完（包括所有 servo write）。Sender 端可以揀跟呢個 ACK
-        // 嚟做 flow control（收到先送下一個），而唔係淨係計 SPD tick
-        // 估時間——因為真實 servo write 所需時間可能同 SPD tick
-        // 假設唔一致，盲目照送會累積令 RX buffer 谷爆。
-        // 冇支援 ACK 嘅 sender（例如舊版 python script）唔會理呢個
-        // byte，唔影響相容性。
+        // 回送 1-byte ACK：0x06 代表呢個 packet 已經完整執行完
+        // （包括所有 servo write）。Sender 可以揀跟呢個 ACK 做
+        // flow control，唔支援 ACK 嘅 sender 唔會理呢個 byte。
         //
         // 注意：Flash-related command（0x1D/0x1E/0x1C/0x02/0x04/0x1F）
-        // 已經跟原裝協議自己送咗一個完整嘅 4-byte（或 ReadFlashBuffer
-        // 嘅 1028-byte large payload）response，唔可以再喺呢度追加呢個
-        //額外 0x06 byte——如果加埋，host 端會將呢個 0x06 當做下一個
-        // response 嘅 LEN byte，令成個 response parser 錯位（例如
-        // SaveMotionId 本身應該回 4-byte 但因為前一個 command 遺留低
-        // 嘅 0x06 byte，被誤判做一個 6-byte packet，扯埋自己 response
-        // 嘅頭 2 個 byte 當做 payload，最終 errorBitmask 顯示錯亂嘅
-        // COMMAND(0x04) 之類假錯誤）。
+        // 已經跟原裝協議自己送咗一個完整嘅 response，唔可以再喺呢度
+        // 追加呢個額外 0x06 byte，否則 host 端 response parser 會錯位。
         uint8_t executedCmd = (pmaPktLen > 1) ? pmaPktBuf[1] : 0xFF;
         bool isFlashCmd = (executedCmd == 0x1D || executedCmd == 0x1E ||
                            executedCmd == 0x1C || executedCmd == 0x02 ||

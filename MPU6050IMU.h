@@ -57,7 +57,7 @@ struct IMUData {
 
 inline IMUData imuData;
 
-// ===== 加速度計安裝零偏（Z軸），2026-07 實測 =====
+// ===== 加速度計安裝零偏（Z軸） =====
 // 主板竪直安裝，MPU-6050 喺板上焊接角度冇完全對齊，企定時
 // accelZ 實測唔係 0（企定/前倾/左倾三組數據交叉驗證確認），
 // 呢個係固定安裝誤差，同陀螺零偏（每次開機飄）性質唔同 ——
@@ -199,7 +199,7 @@ inline bool imuUpdate() {
   imuData.gyroY = (imuData.gyroRawY * MPU6050_GYRO_DPS_PER_LSB) - gyroOffsetY;
   imuData.gyroZ = (imuData.gyroRawZ * MPU6050_GYRO_DPS_PER_LSB) - gyroOffsetZ;
 
-  // 主板竪直安裝，實測軸向同標準「Z軸朝上」假設唔同（2026-07 實測確認）：
+  // 主板竪直安裝，實測軸向同標準「Z軸朝上」假設唔同：
   //   Y 軸 = 重力軸（企定時 accelY≈1.0g）
   //   X 軸 = 左右傾（左倾時 accelX 明顯變負）
   //   Z 軸 = 前後傾（前倾時 accelZ 明顯變負，但要扣走安裝零偏先準）
